@@ -1,8 +1,13 @@
-# Voiceger WebUI
+# Voiceger WebUI(lightweighted version!)
 
-This repository provides an official trial version of the **Voiceger WebUI**. It includes both **Zundamon TTS audio generation** and **Zundamon Voice Conversion** in a single Streamlit-based interface.
+This repository provides an removed streamlit and safetensors inference version of voiceger V2. The mission is to remove overhead and maximizing tts inference speed.
+This repository is the forked version of voiceger-v2, which created by zunzun999 and yh00072.
 
-Official website: https://zunko.jp/
+## why this fork?
+
+1. voiceger v2 uses very cpu-demanding models(cnhubert-roberta,bert), the cpu-only inference speed is extremely low.
+2. this repository has not been updated since 2025. i'll modernize the dependency updating 2026 python and enhance efficiency.
+3. also, i will package this repository by docker. whisch allows to be deployed on cloud developement or servers.
 
 ## Overview
 
