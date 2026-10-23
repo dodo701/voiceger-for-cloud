@@ -1,0 +1,10 @@
+/__pycache__
+cd /workspaces/voiceger_v2
+cat << 'EOF' >> .gitignore
+
+# Python 캐시 전체 무시
+**/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
+EOF

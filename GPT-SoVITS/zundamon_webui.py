@@ -57,8 +57,7 @@ import streamlit as st
 import tempfile
 import os
 import soundfile as sf
-import tkinter as tk
-from tkinter import filedialog
+
 import threading
 from pathlib import Path
 
@@ -403,7 +402,8 @@ def set_background_image():
 def get_work_directory():
     """获取或创建用户作业文件夹"""
     # 使用 AppData\Local\voiceger 作为作业文件夹
-    work_dir = os.path.join(os.getenv('LOCALAPPDATA'), 'voiceger')
+    local_app = os.getenv('LOCALAPPDATA') or os.path.expanduser('~/.local/share')
+    work_dir = os.path.join(local_app, 'voiceger')
     
     # 创建必要的子目录
     subdirs = ['temp', 'output', 'cache']

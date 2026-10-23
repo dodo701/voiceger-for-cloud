@@ -1,3 +1,8 @@
+
+import os
+_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_default_gpt = os.path.join(_root_dir, 'GPT_weights_v2', 'zudamon_style_1-e15.ckpt')
+_default_sovits = os.path.join(_root_dir, 'SoVITS_weights_v2', 'zudamon_style_1_e8_s96.pth')
 '''
 按中英混合识别
 按日英混合识别
@@ -48,20 +53,23 @@ pretrained_gpt_name,pretrained_sovits_name = _
 # with open(f"./weight.json", 'r', encoding="utf-8") as file:
 #     weight_data = file.read()
 #     weight_data=json.loads(weight_data)
-#     gpt_path = os.environ.get(
-#         "gpt_path", weight_data.get('GPT',{}).get(version,pretrained_gpt_name))
-#     sovits_path = os.environ.get(
-#         "sovits_path", weight_data.get('SoVITS',{}).get(version,pretrained_sovits_name))
+#     gpt_path = os.environ.get("gpt_path", _default_gpt).get(version,pretrained_gpt_name))
+#     sovits_path = os.environ.get("sovits_path", _default_sovits).get(version,pretrained_sovits_name))
 #     if isinstance(gpt_path,list):
 #         gpt_path = gpt_path[0]
 #     if isinstance(sovits_path,list):
 #         sovits_path = sovits_path[0]
 
 # 只从环境变量或预设列表里选第一个，不再用 weight.json
-_env_gpt = os.environ.get("gpt_path", None)
-_env_sovits = os.environ.get("sovits_path", None)
-gpt_path    = _env_gpt if (_env_gpt not in [None, ""]) else (pretrained_gpt_name[0]    if len(pretrained_gpt_name)    > 0 else None)
-sovits_path = _env_sovits if (_env_sovits not in [None, ""]) else (pretrained_sovits_name[0] if len(pretrained_sovits_name) > 0 else None)
+# 상대 경로(동적 경로) 기준 즌다몬 기본 가중치 자동 지정
+_base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_default_gpt = os.path.join(_base_dir, 'GPT_weights_v2', 'zudamon_style_1-e15.ckpt')
+_default_sovits = os.path.join(_base_dir, 'SoVITS_weights_v2', 'zudamon_style_1_e8_s96.pth')
+
+_env_gpt = os.environ.get('gpt_path', None)
+_env_sovits = os.environ.get('sovits_path', None)
+gpt_path = _env_gpt if _env_gpt else _default_gpt
+sovits_path = _env_sovits if _env_sovits else _default_sovits
 cnhubert_base_path = os.environ.get(
     "cnhubert_base_path", "GPT_SoVITS/pretrained_models/chinese-hubert-base"
 )
@@ -205,7 +213,7 @@ else:
 
 def change_sovits_weights(sovits_path,prompt_language=None,text_language=None):
     global vq_model, hps, version, dict_language
-    dict_s2 = torch.load(sovits_path, map_location="cpu")
+    dict_s2 = torch.load(sovits_path, map_location="cpu", weights_only=False)
     hps = dict_s2["config"]
     hps = DictToAttrRecursive(hps)
     hps.model.semantic_frame_rate = "25hz"
@@ -256,7 +264,7 @@ change_sovits_weights(sovits_path)
 def change_gpt_weights(gpt_path):
     global hz, max_sec, t2s_model, config
     hz = 50
-    dict_s1 = torch.load(gpt_path, map_location="cpu")
+    dict_s1 = torch.load(gpt_path, map_location="cpu", weights_only=False)
     config = dict_s1["config"]
     max_sec = config["data"]["max_sec"]
     t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
