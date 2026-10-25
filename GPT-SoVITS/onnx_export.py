@@ -1,3 +1,10 @@
+import os
+import sys
+# 🔥 안쪽 폴더의 모듈들을 인식할 수 있도록 경로 강제 주입
+now_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(now_dir)
+sys.path.append(os.path.join(now_dir, "GPT_SoVITS"))
+
 from module.models_onnx import SynthesizerTrn, symbols_v1, symbols_v2
 from AR.models.t2s_lightning_module_onnx import Text2SemanticLightningModule
 import torch
@@ -329,6 +336,51 @@ def export(vits_path, gpt_path, project_name, vits_model="v2"):
     with open(f"onnx/{project_name}.json", 'w') as MoeVsConfFile:
         json.dump(MoeVSConf, MoeVsConfFile, indent = 4)
 
+def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
+    vits = VitsModel(vits_path)
+    gpt = T2SModel(gpt_path, vits)
+    
+    # 1. 추출을 위한 더미 텐서 생성 (v2 버전 규격에 맞춤)
+    ref_seq = torch.LongTensor([cleaned_text_to_sequence(["n", "i2", "h", "ao3"], version=vits_model)])
+    text_seq = torch.LongTensor([cleaned_text_to_sequence(["w", "o3", "sh", "i4"], version=vits_model)])
+    ref_bert = torch.randn((ref_seq.shape[1], 1024)).float()
+    text_bert = torch.randn((text_seq.shape[1], 1024)).float()
+    
+    # 오디오 더미 텐서 및 샘플링 레이트 변환
+    ref_audio = torch.randn((1, 48000 * 5)).float()
+    ref_audio_16k = torchaudio.functional.resample(ref_audio, 48000, 16000).float()
+    ref_audio_sr = torchaudio.functional.resample(ref_audio, 48000, vits.hps.data.sampling_rate).float()
+
+    ssl = SSLModel()
+    ssl_content = ssl(ref_audio_16k).float()
+
+    # 2. GPT(T2S) 모델을 1회 통과시켜 VITS 입력용 pred_semantic(의미론적 토큰) 더미 생성
+    pred_semantic = gpt(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
+
+    try:
+        os.makedirs(f"onnx/{project_name}", exist_ok=True)
+    except:
+        pass
+
+    print(f"🚀 {project_name} VITS 디코더 ONNX 추출 시작...")
+    
+    # 3. VITS 모델 단독 ONNX 추출
+    torch.onnx.export(
+        vits,
+        (text_seq, pred_semantic, ref_audio_sr),
+        f"onnx/{project_name}/{project_name}_vits.onnx",
+        input_names=["text_seq", "pred_semantic", "ref_audio"],
+        output_names=["audio"],
+        dynamic_axes={
+            "text_seq": {1 : "text_length"},
+            "pred_semantic": {2 : "pred_length"},
+            "ref_audio": {1 : "audio_length"},
+        },
+        opset_version=17,
+        verbose=False
+    )
+    print(f"🎉 VITS 단독 추출 완료: onnx/{project_name}/{project_name}_vits.onnx")
+
 
 if __name__ == "__main__":
     try:
@@ -336,9 +388,10 @@ if __name__ == "__main__":
     except:
         pass
 
-    gpt_path = "GPT_weights/nahida-e25.ckpt"
-    vits_path = "SoVITS_weights/nahida_e30_s3930.pth"
-    exp_path = "nahida"
-    export(vits_path, gpt_path, exp_path)
-
-    # soundfile.write("out.wav", a, vits.hps.data.sampling_rate)
+    # 🔥 즌다몬 V2 가중치 경로로 수정
+    gpt_path = "GPT_weights_v2/zudamon_style_1-e15.ckpt"
+    vits_path = "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth"
+    exp_path = "zundamon"
+    
+    # V2 모드로 추출 실행
+    export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2")
