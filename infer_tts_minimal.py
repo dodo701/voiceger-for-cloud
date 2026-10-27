@@ -38,20 +38,6 @@ class ONNXVitsAdapter:
         return torch.from_numpy(audio_onnx).unsqueeze(0).unsqueeze(0).to(text_seq.device)
 
 
-# 2. 클래스 상속(하이재킹)을 통해 pth 파일 로드 원천 차단
-class HybridTTS(TTS):
-    def __init__(self, configs: TTS_Config, onnx_path: str, ref_audio_sr: np.ndarray):
-        self.onnx_path = onnx_path
-        self.ref_audio_sr = ref_audio_sr
-        # 부모 클래스의 __init__을 호출하되, 내부에서 init_vits_weights가 호출될 때 아래 함수가 낚아챔
-        super().__init__(configs)
-
-    def init_vits_weights(self, weights_path: str):
-        print(f"🔪 PyTorch VITS(.pth) 로드를 건너뛰고 ONNX 래퍼를 주입합니다!")
-        self.configs.update_version("v2")
-        self.vits_model = ONNXVitsAdapter(self.onnx_path, self.ref_audio_sr)
-
-
 def main():
     print("🚀 하이브리드(PyTorch + ONNX + Safetensors) 파이프라인 초기화 중...")
 
@@ -61,8 +47,9 @@ def main():
     config.is_half = False 
 
     gpt_path = os.path.join(now_dir, "GPT_weights_v2", "zudamon_style_1-e15.ckpt")
+    vits_weights = os.path.join(now_dir, "SoVITS_weights_v2", "zudamon_style_1_e8_s96.pth")
     config.t2s_weights_path = gpt_path
-    config.vits_weights_path = "dummy.pth" # 더 이상 실제 pth 파일이 필요 없음
+    config.vits_weights_path = vits_weights
 
     torch.set_num_threads(3)
 
@@ -72,10 +59,15 @@ def main():
     ref_audio_sr = torchaudio.functional.resample(ref_audio_tensor, 48000, config.sampling_rate).numpy()
 
     onnx_vits_path = os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
+    onnx_adapter = ONNXVitsAdapter(onnx_vits_path, ref_audio_sr)
 
     # 3. 객체 생성 (이때 __init__ 내부에서 자연스럽게 ONNX 래퍼가 장착됨)
     print(f"📦 프론트엔드 및 하이브리드 엔진 로딩 중...")
-    tts_pipeline = HybridTTS(config, onnx_vits_path, ref_audio_sr)
+    tts_pipeline = TTS(config)
+    # 4. 🔥 몽키 패칭 (Monkey Patching)
+    # 파이토치 VITS 전체를 덮어씌우는 게 아니라, 오직 무거운 'decode' 메서드만 ONNX로 가로챕니다!
+    print("⚡ 파이토치 VITS의 'decode' 메서드만 ONNX 엔진으로 하이재킹합니다...")
+    tts_pipeline.vits_model.decode = onnx_adapter.decode
     
     request_data = {
         "text": "야호! 나는 즌다몬인 거시다! 오늘은 내 한국어 목소리를 테스트해서, 여러 모델을 비교해 본다고 들은 거시다. 후훗, 어떤 내 목소리가 제일 귀엽고, 즌다모찌에 대한 사랑을 잘 표현하는지 똑똑히 들어보란 거시다! ……어라? 만약 이상한 목소리로 들리면 어떡하냐고? 그, 그건 내 잘못이 아니라 설정이나 모델 탓인 거시다! 절대 오해하지 말아 달란 거시다!",
