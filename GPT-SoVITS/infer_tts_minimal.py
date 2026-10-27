@@ -38,7 +38,7 @@ def main():
     
     # 3. 🔥 ONNX VITS 엔진 장착 (Monkey Patching)
     print("⚡ C++ 백엔드 기반 ONNX VITS 어댑터 장착 중...")
-    onnx_vits_path = os.path.join(now_dir, "onnx", "zundamon", "zundamon_vits.onnx")
+    onnx_vits_path = os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
     ort_session = ort.InferenceSession(onnx_vits_path, providers=["CPUExecutionProvider"])
 
     ref_audio_path = os.path.join(now_dir, "reference_audios", "01_ref_emoNormal026.wav")
