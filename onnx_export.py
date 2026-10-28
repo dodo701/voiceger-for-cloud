@@ -1,5 +1,12 @@
 import os
 import sys
+import shutil
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # 🔥 안쪽 폴더의 모듈들을 인식할 수 있도록 경로 강제 주입
 now_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(now_dir)
@@ -30,7 +37,8 @@ def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False)
         (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
         mode="reflect",
     )
-    y = y.squeeze(1)
+    # OpenVINO 호환: .squeeze(1) 대신 슬라이싱을 사용하여 동적 If 분기 노드 생성을 방지
+    y = y[:, 0, :]
     spec = torch.stft(
         y,
         n_fft,
@@ -94,7 +102,7 @@ class T2SEncoder(nn.Module):
 class T2SModel(nn.Module):
     def __init__(self, t2s_path, vits_model):
         super().__init__()
-        dict_s1 = torch.load(t2s_path, map_location="cpu")
+        dict_s1 = torch.load(t2s_path, map_location="cpu", weights_only=False)
         self.config = dict_s1["config"]
         self.t2s_model = Text2SemanticLightningModule(self.config, "ojbk", is_train=False)
         self.t2s_model.load_state_dict(dict_s1["weight"])
@@ -202,7 +210,7 @@ class T2SModel(nn.Module):
 class VitsModel(nn.Module):
     def __init__(self, vits_path):
         super().__init__()
-        dict_s2 = torch.load(vits_path,map_location="cpu")
+        dict_s2 = torch.load(vits_path, map_location="cpu", weights_only=False)
         self.hps = dict_s2["config"]
         if dict_s2['weight']['enc_p.text_embedding.weight'].shape[0] == 322:
             self.hps["model"]["version"] = "v1"
@@ -357,18 +365,17 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
     # 2. GPT(T2S) 모델을 1회 통과시켜 VITS 입력용 pred_semantic(의미론적 토큰) 더미 생성
     pred_semantic = gpt(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
 
-    try:
-        os.makedirs(f"onnx/{project_name}", exist_ok=True)
-    except:
-        pass
+    os.makedirs("SoVITS_weights_v2", exist_ok=True)
 
     print(f"🚀 {project_name} VITS 디코더 ONNX 추출 시작...")
     
+    onnx_out_path = f"SoVITS_weights_v2/{project_name}_vits.onnx"
+
     # 3. VITS 모델 단독 ONNX 추출
     torch.onnx.export(
         vits,
         (text_seq, pred_semantic, ref_audio_sr),
-        f"onnx/{project_name}/{project_name}_vits.onnx",
+        onnx_out_path,
         input_names=["text_seq", "pred_semantic", "ref_audio"],
         output_names=["audio"],
         dynamic_axes={
@@ -377,9 +384,21 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
             "ref_audio": {1 : "audio_length"},
         },
         opset_version=17,
-        verbose=False
+        verbose=False,
+        dynamo=False,
     )
-    print(f"🎉 VITS 단독 추출 완료: onnx/{project_name}/{project_name}_vits.onnx")
+
+    # 4. OpenVINOExecutionProvider 호환을 위한 정적 Rank 및 Shape 추론 정보 주입
+    import onnx
+    from onnx import helper, TensorProto
+    onnx_model = onnx.load(onnx_out_path)
+    freq_bins = vits.hps.data.filter_length // 2 + 1
+    onnx_model.graph.value_info.append(
+        helper.make_tensor_value_info("/STFT_output_0", TensorProto.FLOAT, [1, "frames", freq_bins, 2])
+    )
+    onnx_model = onnx.shape_inference.infer_shapes(onnx_model, data_prop=True)
+    onnx.save(onnx_model, onnx_out_path)
+    print(f"🎉 VITS 단독 추출 완료 (OpenVINO 호환 적용): {onnx_out_path}")
 
 #latent 가중치 추출 코드.
 def export_latent_only(vits_path, project_name):
@@ -403,18 +422,16 @@ def export_latent_only(vits_path, project_name):
     extractor = LatentExtractor(vits.vq_model)
     extractor.eval()
 
-    try:
-        os.makedirs(f"onnx/{project_name}", exist_ok=True)
-    except:
-        pass
+    os.makedirs("SoVITS_weights_v2", exist_ok=True)
 
     print(f"🚀 {project_name} VITS Latent Extractor ONNX 추출 시작...")
+    latent_out_path = f"SoVITS_weights_v2/{project_name}_latent.onnx"
     
     # 4. ONNX로 굽기
     torch.onnx.export(
         extractor,
         (dummy_ssl_content,),
-        f"onnx/{project_name}/{project_name}_latent.onnx",
+        latent_out_path,
         input_names=["ssl_content"],
         output_names=["codes"],
         dynamic_axes={
@@ -422,29 +439,19 @@ def export_latent_only(vits_path, project_name):
             "codes": {1: "codes_length"}
         },
         opset_version=17,
-        verbose=False
+        verbose=False,
+        dynamo=False,
     )
-    print(f"🎉 Latent 추출기 단독 완료: onnx/{project_name}/{project_name}_latent.onnx")
+    import onnx
+    latent_model = onnx.shape_inference.infer_shapes(onnx.load(latent_out_path), data_prop=True)
+    onnx.save(latent_model, latent_out_path)
+    print(f"🎉 Latent 추출기 단독 완료: {latent_out_path}")
 
-# --- 실행부 추가 ---
+# --- 실행부 ---
 if __name__ == "__main__":
-    vits_path = "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth"
-    exp_path = "zundamon"
-    
-    # 이 줄을 주석 해제하여 실행하면 _latent.onnx 파일이 생성됩니다.
-    export_latent_only(vits_path, exp_path)
-
-
-if __name__ == "__main__":
-    try:
-        os.mkdir("onnx")
-    except:
-        pass
-
-    # 🔥 즌다몬 V2 가중치 경로로 수정
     gpt_path = "GPT_weights_v2/zudamon_style_1-e15.ckpt"
     vits_path = "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth"
     exp_path = "zundamon"
-    
-    # V2 모드로 추출 실행
-    # export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2") 모델을 추출하려면 이 주석을 해제하고 실행하세요.
+
+    export_latent_only(vits_path, exp_path)
+    export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2")

@@ -344,11 +344,20 @@ class TTS:
         self.configs.t2s_weights_path = weights_path
         self.configs.save_configs()
         self.configs.hz = 50
-        dict_s1 = torch.load(weights_path, map_location=self.configs.device)
-        config = dict_s1["config"]
+        if weights_path.endswith(".safetensors"):
+            import json
+            from safetensors import safe_open
+            from safetensors.torch import load_file
+            with safe_open(weights_path, framework="pt", device=str(self.configs.device)) as f:
+                config = json.loads(f.metadata()["config"])
+            weights = load_file(weights_path, device=str(self.configs.device))
+        else:
+            dict_s1 = torch.load(weights_path, map_location=self.configs.device, weights_only=False)
+            config = dict_s1["config"]
+            weights = dict_s1["weight"]
         self.configs.max_sec = config["data"]["max_sec"]
         t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
-        t2s_model.load_state_dict(dict_s1["weight"])
+        t2s_model.load_state_dict(weights)
         t2s_model = t2s_model.to(self.configs.device)
         t2s_model = t2s_model.eval()
         self.t2s_model = t2s_model
