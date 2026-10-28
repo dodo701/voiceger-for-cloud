@@ -9,8 +9,7 @@ files = api.list_repo_files(repo_id=REPO_ID)
 downloads = [
     ("zudamon_style_1-e15.ckpt", "GPT_weights_v2"),
     ("zundamon_vits.onnx", "SoVITS_weights_v2"),
-    ("zudamon_style_1_e8_s96.pth", "SoVITS_weights_v2") # temporary, for compatability issues.
-    
+    ("zundamon_style_1_e8_s96.pth", "SoVITS_weights_v2")  # temporary, for compatability issues.
 ]
 
 for f in files:
@@ -19,7 +18,30 @@ for f in files:
     elif f.startswith("roberta"):
         downloads.append((f, "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"))
 
+
+def sanitize_downloaded_filename(file_name):
+    name, ext = os.path.splitext(file_name)
+    lower_ext = ext.lower()
+
+    if lower_ext in (".safetensors", ".safetensor"):
+        return "models" + ext
+
+    if "-" in name:
+        name = name.split("-", 1)[1]
+
+    return name + ext
+
+
 for file_name, local_dir in downloads:
     os.makedirs(local_dir, exist_ok=True)
-    hf_hub_download(repo_id=REPO_ID, filename=file_name, local_dir=local_dir)
-    print(f"Downloaded {file_name} to {local_dir}")
+    downloaded_path = hf_hub_download(repo_id=REPO_ID, filename=file_name, local_dir=local_dir)
+
+    original_name = os.path.basename(downloaded_path)
+    renamed_name = sanitize_downloaded_filename(original_name)
+    target_path = os.path.join(os.path.dirname(downloaded_path), renamed_name)
+
+    if original_name != renamed_name:
+        os.rename(downloaded_path, target_path)
+        print(f"Renamed {original_name} -> {renamed_name}")
+
+    print(f"Downloaded {renamed_name} to {os.path.dirname(target_path)}")
