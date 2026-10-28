@@ -9,6 +9,8 @@ files = api.list_repo_files(repo_id=REPO_ID)
 downloads = [
     ("zudamon_style_1-e15.ckpt", "GPT_weights_v2"),
     ("zundamon_vits.onnx", "SoVITS_weights_v2"),
+    ("zudamon_style_1_e8_s96.pth", "SoVITS_weights_v2") # temporary, for compatability issues.
+    
 ]
 
 for f in files:
