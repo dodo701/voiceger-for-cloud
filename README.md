@@ -1,7 +1,7 @@
 # Voiceger WebUI(lightweighted version!)
 
 This repository provides an removed streamlit and safetensors inference version of voiceger V2. The mission is to remove overhead and maximizing tts inference speed.
-This repository is the forked version of voiceger-v2, which created by zunzun999 and yh00072.
+This repository is the fork of voiceger-v2, which created by zunzun999 and yh00072.
 
 ## why this fork?
 
@@ -33,9 +33,10 @@ After installing the dependencies, install PyTorch and its companion packages. B
 
 The following versions are tested and verified to work successfully:
 
-- **PyTorch**: `2.1.2`
-- **CUDA**: `12.1`
+- **PyTorch and torchAudio**: `2.11.0+cpu`
+- **CUDA**: removed
 - **Python**: `3.9`
+- **onnx with OPENvino**: '1.24.1'
 
 You can install it using the [following command](https://pytorch.org/get-started/previous-versions/#linux-and-windows-19):
 
