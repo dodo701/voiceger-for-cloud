@@ -381,6 +381,59 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
     )
     print(f"🎉 VITS 단독 추출 완료: onnx/{project_name}/{project_name}_vits.onnx")
 
+#latent 가중치 추출 코드.
+def export_latent_only(vits_path, project_name):
+    # 1. 원본 VITS 모델 로드
+    vits = VitsModel(vits_path)
+    
+    # 2. HuBERT 출력 규격에 맞춘 더미 텐서 (배치, 차원, 시퀀스 길이)
+    # ssl_dim은 v2 모델 기준 768 고정
+    dummy_ssl_content = torch.randn(1, 768, 100).float()
+    
+    # 3. ONNX Export를 위해 extract_latent만 감싸는 래퍼(Wrapper) 모듈 생성
+    class LatentExtractor(nn.Module):
+        def __init__(self, vq_model):
+            super().__init__()
+            self.vq_model = vq_model
+            
+        def forward(self, x):
+            # vq_model(SynthesizerTrn)의 extract_latent 강제 호출
+            return self.vq_model.extract_latent(x)
+            
+    extractor = LatentExtractor(vits.vq_model)
+    extractor.eval()
+
+    try:
+        os.makedirs(f"onnx/{project_name}", exist_ok=True)
+    except:
+        pass
+
+    print(f"🚀 {project_name} VITS Latent Extractor ONNX 추출 시작...")
+    
+    # 4. ONNX로 굽기
+    torch.onnx.export(
+        extractor,
+        (dummy_ssl_content,),
+        f"onnx/{project_name}/{project_name}_latent.onnx",
+        input_names=["ssl_content"],
+        output_names=["codes"],
+        dynamic_axes={
+            "ssl_content": {2: "ssl_length"},
+            "codes": {1: "codes_length"}
+        },
+        opset_version=17,
+        verbose=False
+    )
+    print(f"🎉 Latent 추출기 단독 완료: onnx/{project_name}/{project_name}_latent.onnx")
+
+# --- 실행부 추가 ---
+if __name__ == "__main__":
+    vits_path = "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth"
+    exp_path = "zundamon"
+    
+    # 이 줄을 주석 해제하여 실행하면 _latent.onnx 파일이 생성됩니다.
+    export_latent_only(vits_path, exp_path)
+
 
 if __name__ == "__main__":
     try:
@@ -394,4 +447,4 @@ if __name__ == "__main__":
     exp_path = "zundamon"
     
     # V2 모드로 추출 실행
-    export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2")
+    # export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2") 모델을 추출하려면 이 주석을 해제하고 실행하세요.
