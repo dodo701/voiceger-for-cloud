@@ -59,7 +59,7 @@ networkx==3.4.2
 nltk==3.10.4
 numba==0.58.1
 numpy==1.26.4
-onnx==1.17.0
+onnx==1.22.0
 onnx-ir==0.1.8
 onnxruntime==1.18.0
 packaging==26.3
