@@ -8,8 +8,8 @@ files = api.list_repo_files(repo_id=REPO_ID)
 # Define mappings from file in repo to local directory
 downloads = [
     ("zudamon_style_1-e15.safetensors", "GPT_weights_v2"),
-    ("zudamon_vits.onnx", "SoVITS_weights_v2"),
-    ("zudamon_latent.onnx", "SoVITS_weights_v2")  # issues mitigated. added full pipeline support for onnx.
+    ("zundamon_vits.onnx", "SoVITS_weights_v2"),
+    ("zundamon_latent.onnx", "SoVITS_weights_v2")  # issues mitigated. added full pipeline support for onnx.
 ]
 
 for f in files:
