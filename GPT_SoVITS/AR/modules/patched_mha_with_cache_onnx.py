@@ -50,7 +50,7 @@ def multi_head_attention_forward_patched(
     head_dim = embed_dim // num_heads
 
     proj_qkv = linear(query, in_proj_weight, in_proj_bias)
-    proj_qkv = proj_qkv.unflatten(-1, (3, query.size(-1))).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+    proj_qkv = proj_qkv.unflatten(-1, (3, query.size(-1))).permute(2, 0, 1, 3).contiguous()
     q, k, v = proj_qkv[0], proj_qkv[1], proj_qkv[2]
 
     if cache["first_infer"] == 1:

@@ -1,4 +1,4 @@
-import pickle
+import json
 import os
 import re
 import wordsegment
@@ -16,11 +16,9 @@ word_tokenize = TweetTokenizer().tokenize
 from nltk import pos_tag
 
 current_file_path = os.path.dirname(__file__)
-CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
-CMU_DICT_FAST_PATH = os.path.join(current_file_path, "cmudict-fast.rep")
 CMU_DICT_HOT_PATH = os.path.join(current_file_path, "engdict-hot.rep")
-CACHE_PATH = os.path.join(current_file_path, "engdict_cache.pickle")
-NAMECACHE_PATH = os.path.join(current_file_path, "namedict_cache.pickle")
+CACHE_PATH = os.path.join(current_file_path, "engdict_cache.json")
+NAMECACHE_PATH = os.path.join(current_file_path, "namedict_cache.json")
 
 arpa = {
     "AH0",
@@ -191,17 +189,13 @@ def hot_reload_hot(g2p_dict):
 
 
 def cache_dict(g2p_dict, file_path):
-    with open(file_path, "wb") as pickle_file:
-        pickle.dump(g2p_dict, pickle_file)
+    with open(file_path, "w", encoding="utf-8") as json_file:
+        json.dump(g2p_dict, json_file, ensure_ascii=False)
 
 
 def get_dict():
-    if os.path.exists(CACHE_PATH):
-        with open(CACHE_PATH, "rb") as pickle_file:
-            g2p_dict = pickle.load(pickle_file)
-    else:
-        g2p_dict = read_dict_new()
-        cache_dict(g2p_dict, CACHE_PATH)
+    with open(CACHE_PATH, "r", encoding="utf-8") as json_file:
+        g2p_dict = json.load(json_file)
 
     g2p_dict = hot_reload_hot(g2p_dict)
 
@@ -210,8 +204,8 @@ def get_dict():
 
 def get_namedict():
     if os.path.exists(NAMECACHE_PATH):
-        with open(NAMECACHE_PATH, "rb") as pickle_file:
-            name_dict = pickle.load(pickle_file)
+        with open(NAMECACHE_PATH, "r", encoding="utf-8") as json_file:
+            name_dict = json.load(json_file)
     else:
         name_dict = {}
 

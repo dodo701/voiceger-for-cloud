@@ -9,16 +9,14 @@ now_dir = os.getcwd()
 sys.path.append(now_dir)
 import ffmpeg
 import os
-from typing import Generator, List, Tuple, Union
+from typing import Any, Generator, List, Tuple, Union
 import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-from AR.models.t2s_lightning_module import Text2SemanticLightningModule
 from feature_extractor.cnhubert import CNHubert
-from module.models import SynthesizerTrn
 import librosa
 from time import time as ttime
 from tools.i18n.i18n import I18nAuto, scan_language_list
@@ -243,8 +241,8 @@ class TTS:
         else:
             self.configs:TTS_Config = TTS_Config(configs)
         
-        self.t2s_model:Text2SemanticLightningModule = None
-        self.vits_model:SynthesizerTrn = None
+        self.t2s_model: Any = None
+        self.vits_model: Any = None
         self.bert_tokenizer:AutoTokenizer = None
         self.bert_model:AutoModelForMaskedLM = None
         self.cnhuhbert_model:CNHubert = None
@@ -302,6 +300,7 @@ class TTS:
             self.bert_model = self.bert_model.half()
         
     def init_vits_weights(self, weights_path: str):
+        from module.models import SynthesizerTrn
         print(f"Loading VITS weights from {weights_path}")
         self.configs.vits_weights_path = weights_path
         dict_s2 = torch.load(weights_path, map_location=self.configs.device, weights_only=False)
@@ -340,6 +339,7 @@ class TTS:
 
         
     def init_t2s_weights(self, weights_path: str):
+        from AR.models.t2s_lightning_module import Text2SemanticLightningModule
         print(f"Loading Text2Semantic weights from {weights_path}")
         self.configs.t2s_weights_path = weights_path
         self.configs.save_configs()

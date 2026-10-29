@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import json
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -25,13 +26,12 @@ ssl_model = cnhubert.get_model()
 from text import cleaned_text_to_sequence
 import soundfile
 from tools.my_utils import load_audio
-import os
-import json
+
 
 def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False):
     hann_window = torch.hann_window(win_size).to(
-            dtype=y.dtype, device=y.device
-        )
+        dtype=y.dtype, device=y.device
+    )
     y = torch.nn.functional.pad(
         y.unsqueeze(1),
         (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
@@ -88,7 +88,7 @@ class T2SEncoder(nn.Module):
         super().__init__()
         self.encoder = t2s.onnx_encoder
         self.vits = vits
-    
+
     def forward(self, ref_seq, text_seq, ref_bert, text_bert, ssl_content):
         codes = self.vits.extract_latent(ssl_content)
         prompt_semantic = codes[0, 0]
@@ -102,10 +102,18 @@ class T2SEncoder(nn.Module):
 class T2SModel(nn.Module):
     def __init__(self, t2s_path, vits_model):
         super().__init__()
-        dict_s1 = torch.load(t2s_path, map_location="cpu", weights_only=False)
-        self.config = dict_s1["config"]
+        if t2s_path.endswith(".safetensors"):
+            from safetensors import safe_open
+            from safetensors.torch import load_file
+            with safe_open(t2s_path, framework="pt", device="cpu") as f:
+                self.config = json.loads(f.metadata()["config"])
+            weights = load_file(t2s_path, device="cpu")
+        else:
+            dict_s1 = torch.load(t2s_path, map_location="cpu", weights_only=False)
+            self.config = dict_s1["config"]
+            weights = dict_s1["weight"]
         self.t2s_model = Text2SemanticLightningModule(self.config, "ojbk", is_train=False)
-        self.t2s_model.load_state_dict(dict_s1["weight"])
+        self.t2s_model.load_state_dict(weights)
         self.t2s_model.eval()
         self.vits_model = vits_model.vq_model
         self.hz = 50
@@ -117,22 +125,21 @@ class T2SModel(nn.Module):
         self.onnx_encoder = T2SEncoder(self.t2s_model, self.vits_model)
         self.first_stage_decoder = self.t2s_model.first_stage_decoder
         self.stage_decoder = self.t2s_model.stage_decoder
-        #self.t2s_model = torch.jit.script(self.t2s_model)
 
     def forward(self, ref_seq, text_seq, ref_bert, text_bert, ssl_content):
         early_stop_num = self.t2s_model.early_stop_num
 
-        #[1,N] [1,N] [N, 1024] [N, 1024] [1, 768, N]
+        # [1,N] [1,N] [N, 1024] [N, 1024] [1, 768, N]
         x, prompts = self.onnx_encoder(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
 
         prefix_len = prompts.shape[1]
 
-        #[1,N,512] [1,N]
+        # [1,N,512] [1,N]
         y, k, v, y_emb, x_example = self.first_stage_decoder(x, prompts)
 
         stop = False
         for idx in range(1, 1500):
-            #[1, N] [N_layer, N, 1, 512] [N_layer, N, 1, 512] [1, N, 512] [1] [1, N, 512] [1, N]
+            # [1, N] [N_layer, N, 1, 512] [N_layer, N, 1, 512] [1, N, 512] [1] [1, N, 512] [1, N]
             enco = self.stage_decoder(y, k, v, y_emb, x_example)
             y, k, v, y_emb, logits, samples = enco
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
@@ -146,7 +153,12 @@ class T2SModel(nn.Module):
         return y[:, -idx:].unsqueeze(0)
 
     def export(self, ref_seq, text_seq, ref_bert, text_bert, ssl_content, project_name, dynamo=False):
-        #self.onnx_encoder = torch.jit.script(self.onnx_encoder)
+        import onnx
+        os.makedirs("GPT_weights_v2", exist_ok=True)
+        enc_path = f"GPT_weights_v2/{project_name}_t2s_encoder.onnx"
+        fsdec_path = f"GPT_weights_v2/{project_name}_t2s_fsdec.onnx"
+        sdec_path = f"GPT_weights_v2/{project_name}_t2s_sdec.onnx"
+
         if dynamo:
             export_options = torch.onnx.ExportOptions(dynamic_shapes=True)
             onnx_encoder_export_output = torch.onnx.dynamo_export(
@@ -154,57 +166,75 @@ class T2SModel(nn.Module):
                 (ref_seq, text_seq, ref_bert, text_bert, ssl_content),
                 export_options=export_options
             )
-            onnx_encoder_export_output.save(f"onnx/{project_name}/{project_name}_t2s_encoder.onnx")
+            onnx_encoder_export_output.save(enc_path)
             return
 
+        print(f"🚀 {project_name} T2S Encoder ONNX 추출 시작...")
         torch.onnx.export(
             self.onnx_encoder,
             (ref_seq, text_seq, ref_bert, text_bert, ssl_content),
-            f"onnx/{project_name}/{project_name}_t2s_encoder.onnx",
+            enc_path,
             input_names=["ref_seq", "text_seq", "ref_bert", "text_bert", "ssl_content"],
             output_names=["x", "prompts"],
             dynamic_axes={
-                "ref_seq": {1 : "ref_length"},
-                "text_seq": {1 : "text_length"},
-                "ref_bert": {0 : "ref_length"},
-                "text_bert": {0 : "text_length"},
-                "ssl_content": {2 : "ssl_length"},
+                "ref_seq": {1: "ref_length"},
+                "text_seq": {1: "text_length"},
+                "ref_bert": {0: "ref_length"},
+                "text_bert": {0: "text_length"},
+                "ssl_content": {2: "ssl_length"},
             },
-            opset_version=16
+            opset_version=17,
+            verbose=False,
+            dynamo=False,
         )
+        enc_model = onnx.shape_inference.infer_shapes(onnx.load(enc_path), data_prop=True)
+        onnx.save(enc_model, enc_path)
+        print(f"🎉 T2S Encoder 추출 완료 (OpenVINO 호환 적용): {enc_path}")
+
         x, prompts = self.onnx_encoder(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
 
+        print(f"🚀 {project_name} T2S First Stage Decoder ONNX 추출 시작...")
         torch.onnx.export(
             self.first_stage_decoder,
             (x, prompts),
-            f"onnx/{project_name}/{project_name}_t2s_fsdec.onnx",
+            fsdec_path,
             input_names=["x", "prompts"],
             output_names=["y", "k", "v", "y_emb", "x_example"],
             dynamic_axes={
-                "x": {1 : "x_length"},
-                "prompts": {1 : "prompts_length"},
+                "x": {1: "x_length"},
+                "prompts": {1: "prompts_length"},
             },
             verbose=False,
-            opset_version=16
+            opset_version=17,
+            dynamo=False,
         )
+        fsdec_model = onnx.shape_inference.infer_shapes(onnx.load(fsdec_path), data_prop=True)
+        onnx.save(fsdec_model, fsdec_path)
+        print(f"🎉 T2S First Stage Decoder 추출 완료 (OpenVINO 호환 적용): {fsdec_path}")
+
         y, k, v, y_emb, x_example = self.first_stage_decoder(x, prompts)
 
+        print(f"🚀 {project_name} T2S Stage Decoder ONNX 추출 시작...")
         torch.onnx.export(
             self.stage_decoder,
             (y, k, v, y_emb, x_example),
-            f"onnx/{project_name}/{project_name}_t2s_sdec.onnx",
+            sdec_path,
             input_names=["iy", "ik", "iv", "iy_emb", "ix_example"],
             output_names=["y", "k", "v", "y_emb", "logits", "samples"],
             dynamic_axes={
-                "iy": {1 : "iy_length"},
-                "ik": {1 : "ik_length"},
-                "iv": {1 : "iv_length"},
-                "iy_emb": {1 : "iy_emb_length"},
-                "ix_example": {1 : "ix_example_length"},
+                "iy": {1: "iy_length"},
+                "ik": {1: "ik_length"},
+                "iv": {1: "iv_length"},
+                "iy_emb": {1: "iy_emb_length"},
+                "ix_example": {1: "ix_example_length"},
             },
             verbose=False,
-            opset_version=16
+            opset_version=17,
+            dynamo=False,
         )
+        sdec_model = onnx.shape_inference.infer_shapes(onnx.load(sdec_path), data_prop=True)
+        onnx.save(sdec_model, sdec_path)
+        print(f"🎉 T2S Stage Decoder 추출 완료 (OpenVINO 호환 적용): {sdec_path}")
 
 
 class VitsModel(nn.Module):
@@ -216,7 +246,7 @@ class VitsModel(nn.Module):
             self.hps["model"]["version"] = "v1"
         else:
             self.hps["model"]["version"] = "v2"
-        
+
         self.hps = DictToAttrRecursive(self.hps)
         self.hps.model.semantic_frame_rate = "25hz"
         self.vq_model = SynthesizerTrn(
@@ -227,7 +257,7 @@ class VitsModel(nn.Module):
         )
         self.vq_model.eval()
         self.vq_model.load_state_dict(dict_s2["weight"], strict=False)
-        
+
     def forward(self, text_seq, pred_semantic, ref_audio):
         refer = spectrogram_torch(
             ref_audio,
@@ -245,38 +275,57 @@ class GptSoVits(nn.Module):
         super().__init__()
         self.vits = vits
         self.t2s = t2s
-    
-    def forward(self, ref_seq, text_seq, ref_bert, text_bert, ref_audio, ssl_content, debug=False):
+
+    def forward(self, ref_seq, text_seq, ref_bert, text_bert, ref_audio, ssl_content, debug=False, project_name="zundamon"):
         pred_semantic = self.t2s(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
         audio = self.vits(text_seq, pred_semantic, ref_audio)
         if debug:
             import onnxruntime
-            sess = onnxruntime.InferenceSession("onnx/koharu/koharu_vits.onnx", providers=["CPU"])
+            sess = onnxruntime.InferenceSession(f"SoVITS_weights_v2/{project_name}_vits.onnx", providers=["CPUExecutionProvider"])
             audio1 = sess.run(None, {
-                "text_seq" : text_seq.detach().cpu().numpy(),
-                "pred_semantic" : pred_semantic.detach().cpu().numpy(), 
-                "ref_audio" : ref_audio.detach().cpu().numpy()
+                "text_seq": text_seq.detach().cpu().numpy(),
+                "pred_semantic": pred_semantic.detach().cpu().numpy(),
+                "ref_audio": ref_audio.detach().cpu().numpy()
             })
             return audio, audio1
         return audio
 
     def export(self, ref_seq, text_seq, ref_bert, text_bert, ref_audio, ssl_content, project_name):
+        import onnx
+        from onnx import helper, TensorProto
+
+        # 1. GPT(T2S) 3단계 모델 ONNX 추출 (OpenVINO 호환 패치 포함)
         self.t2s.export(ref_seq, text_seq, ref_bert, text_bert, ssl_content, project_name)
+
+        # 2. VITS 디코더 ONNX 추출 (OpenVINO 호환 패치 포함)
         pred_semantic = self.t2s(ref_seq, text_seq, ref_bert, text_bert, ssl_content)
+        os.makedirs("SoVITS_weights_v2", exist_ok=True)
+        vits_out_path = f"SoVITS_weights_v2/{project_name}_vits.onnx"
+
+        print(f"🚀 {project_name} VITS 디코더 ONNX 추출 시작...")
         torch.onnx.export(
             self.vits,
             (text_seq, pred_semantic, ref_audio),
-            f"onnx/{project_name}/{project_name}_vits.onnx",
+            vits_out_path,
             input_names=["text_seq", "pred_semantic", "ref_audio"],
             output_names=["audio"],
             dynamic_axes={
-                "text_seq": {1 : "text_length"},
-                "pred_semantic": {2 : "pred_length"},
-                "ref_audio": {1 : "audio_length"},
+                "text_seq": {1: "text_length"},
+                "pred_semantic": {2: "pred_length"},
+                "ref_audio": {1: "audio_length"},
             },
             opset_version=17,
-            verbose=False
+            verbose=False,
+            dynamo=False,
         )
+        onnx_model = onnx.load(vits_out_path)
+        freq_bins = self.vits.hps.data.filter_length // 2 + 1
+        onnx_model.graph.value_info.append(
+            helper.make_tensor_value_info("/STFT_output_0", TensorProto.FLOAT, [1, "frames", freq_bins, 2])
+        )
+        onnx_model = onnx.shape_inference.infer_shapes(onnx_model, data_prop=True)
+        onnx.save(onnx_model, vits_out_path)
+        print(f"🎉 VITS 디코더 추출 완료 (OpenVINO 호환 적용): {vits_out_path}")
 
 
 class SSLModel(nn.Module):
@@ -288,44 +337,31 @@ class SSLModel(nn.Module):
         return self.ssl.model(ref_audio_16k)["last_hidden_state"].transpose(1, 2)
 
 
-def export(vits_path, gpt_path, project_name, vits_model="v2"):
+def export(vits_path, gpt_path, project_name, vits_model="v2", debug=False):
+    # 0. VITS Latent 추출기 먼저 추출
+    export_latent_only(vits_path, project_name)
+
     vits = VitsModel(vits_path)
     gpt = T2SModel(gpt_path, vits)
     gpt_sovits = GptSoVits(vits, gpt)
     ssl = SSLModel()
-    ref_seq = torch.LongTensor([cleaned_text_to_sequence(["n", "i2", "h", "ao3", ",", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4"],version=vits_model)])
-    text_seq = torch.LongTensor([cleaned_text_to_sequence(["w", "o3", "sh", "i4", "b", "ai2", "y", "e4", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4"],version=vits_model)])
+    ref_seq = torch.LongTensor([cleaned_text_to_sequence(["n", "i2", "h", "ao3", ",", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4"], version=vits_model)])
+    text_seq = torch.LongTensor([cleaned_text_to_sequence(["w", "o3", "sh", "i4", "b", "ai2", "y", "e4", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4", "w", "o3", "sh", "i4", "b", "ai2", "y", "e4"], version=vits_model)])
     ref_bert = torch.randn((ref_seq.shape[1], 1024)).float()
     text_bert = torch.randn((text_seq.shape[1], 1024)).float()
     ref_audio = torch.randn((1, 48000 * 5)).float()
-    # ref_audio = torch.tensor([load_audio("rec.wav", 48000)]).float()
-    ref_audio_16k = torchaudio.functional.resample(ref_audio,48000,16000).float()
-    ref_audio_sr = torchaudio.functional.resample(ref_audio,48000,vits.hps.data.sampling_rate).float()
-
-    try:
-        os.mkdir(f"onnx/{project_name}")
-    except:
-        pass
+    ref_audio_16k = torchaudio.functional.resample(ref_audio, 48000, 16000).float()
+    ref_audio_sr = torchaudio.functional.resample(ref_audio, 48000, vits.hps.data.sampling_rate).float()
 
     ssl_content = ssl(ref_audio_16k).float()
 
-    # debug = False
-    debug = True
-
-    # gpt_sovits.export(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content, project_name)
+    # GPT(T2S) 3종 + VITS ONNX 전체 추출 실행
+    gpt_sovits.export(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content, project_name)
 
     if debug:
-        a, b = gpt_sovits(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content, debug=debug)
+        a, b = gpt_sovits(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content, debug=debug, project_name=project_name)
         soundfile.write("out1.wav", a.cpu().detach().numpy(), vits.hps.data.sampling_rate)
         soundfile.write("out2.wav", b[0], vits.hps.data.sampling_rate)
-    else:
-        a = gpt_sovits(ref_seq, text_seq, ref_bert, text_bert, ref_audio_sr, ssl_content).detach().cpu().numpy()
-        soundfile.write("out.wav", a, vits.hps.data.sampling_rate)
-
-    if vits_model == "v1":
-        symbols = symbols_v1
-    else:
-        symbols = symbols_v2
 
     MoeVSConf = {
         "Folder": f"{project_name}",
@@ -336,24 +372,25 @@ def export(vits_path, gpt_path, project_name, vits_model="v2"):
         "EmbeddingDim": gpt.t2s_model.embedding_dim,
         "Dict": "BasicDict",
         "BertPath": "chinese-roberta-wwm-ext-large",
-        # "Symbol": symbols,
         "AddBlank": False,
     }
 
-    MoeVSConfJson = json.dumps(MoeVSConf)
-    with open(f"onnx/{project_name}.json", 'w') as MoeVsConfFile:
-        json.dump(MoeVSConf, MoeVsConfFile, indent = 4)
+    os.makedirs("GPT_weights_v2", exist_ok=True)
+    with open(f"GPT_weights_v2/{project_name}.json", 'w', encoding="utf-8") as MoeVsConfFile:
+        json.dump(MoeVSConf, MoeVsConfFile, indent=4)
+    print(f"✅ 전체 ONNX 모델(GPT 3종 + VITS 2종) 추출 및 OpenVINO 호환 패치가 완료되었습니다!")
+
 
 def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
     vits = VitsModel(vits_path)
     gpt = T2SModel(gpt_path, vits)
-    
+
     # 1. 추출을 위한 더미 텐서 생성 (v2 버전 규격에 맞춤)
     ref_seq = torch.LongTensor([cleaned_text_to_sequence(["n", "i2", "h", "ao3"], version=vits_model)])
     text_seq = torch.LongTensor([cleaned_text_to_sequence(["w", "o3", "sh", "i4"], version=vits_model)])
     ref_bert = torch.randn((ref_seq.shape[1], 1024)).float()
     text_bert = torch.randn((text_seq.shape[1], 1024)).float()
-    
+
     # 오디오 더미 텐서 및 샘플링 레이트 변환
     ref_audio = torch.randn((1, 48000 * 5)).float()
     ref_audio_16k = torchaudio.functional.resample(ref_audio, 48000, 16000).float()
@@ -368,7 +405,7 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
     os.makedirs("SoVITS_weights_v2", exist_ok=True)
 
     print(f"🚀 {project_name} VITS 디코더 ONNX 추출 시작...")
-    
+
     onnx_out_path = f"SoVITS_weights_v2/{project_name}_vits.onnx"
 
     # 3. VITS 모델 단독 ONNX 추출
@@ -379,9 +416,9 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
         input_names=["text_seq", "pred_semantic", "ref_audio"],
         output_names=["audio"],
         dynamic_axes={
-            "text_seq": {1 : "text_length"},
-            "pred_semantic": {2 : "pred_length"},
-            "ref_audio": {1 : "audio_length"},
+            "text_seq": {1: "text_length"},
+            "pred_semantic": {2: "pred_length"},
+            "ref_audio": {1: "audio_length"},
         },
         opset_version=17,
         verbose=False,
@@ -400,25 +437,26 @@ def export_vits_only(vits_path, gpt_path, project_name, vits_model="v2"):
     onnx.save(onnx_model, onnx_out_path)
     print(f"🎉 VITS 단독 추출 완료 (OpenVINO 호환 적용): {onnx_out_path}")
 
-#latent 가중치 추출 코드.
+
+# latent 가중치 추출 코드.
 def export_latent_only(vits_path, project_name):
     # 1. 원본 VITS 모델 로드
     vits = VitsModel(vits_path)
-    
+
     # 2. HuBERT 출력 규격에 맞춘 더미 텐서 (배치, 차원, 시퀀스 길이)
     # ssl_dim은 v2 모델 기준 768 고정
     dummy_ssl_content = torch.randn(1, 768, 100).float()
-    
+
     # 3. ONNX Export를 위해 extract_latent만 감싸는 래퍼(Wrapper) 모듈 생성
     class LatentExtractor(nn.Module):
         def __init__(self, vq_model):
             super().__init__()
             self.vq_model = vq_model
-            
+
         def forward(self, x):
             # vq_model(SynthesizerTrn)의 extract_latent 강제 호출
             return self.vq_model.extract_latent(x)
-            
+
     extractor = LatentExtractor(vits.vq_model)
     extractor.eval()
 
@@ -426,7 +464,7 @@ def export_latent_only(vits_path, project_name):
 
     print(f"🚀 {project_name} VITS Latent Extractor ONNX 추출 시작...")
     latent_out_path = f"SoVITS_weights_v2/{project_name}_latent.onnx"
-    
+
     # 4. ONNX로 굽기
     torch.onnx.export(
         extractor,
@@ -447,11 +485,11 @@ def export_latent_only(vits_path, project_name):
     onnx.save(latent_model, latent_out_path)
     print(f"🎉 Latent 추출기 단독 완료: {latent_out_path}")
 
+
 # --- 실행부 ---
 if __name__ == "__main__":
     gpt_path = "GPT_weights_v2/zudamon_style_1-e15.ckpt"
     vits_path = "SoVITS_weights_v2/zudamon_style_1_e8_s96.pth"
     exp_path = "zundamon"
 
-    export_latent_only(vits_path, exp_path)
-    export_vits_only(vits_path, gpt_path, exp_path, vits_model="v2")
+    export(vits_path, gpt_path, exp_path, vits_model="v2")
