@@ -7,7 +7,6 @@ import traceback
 from tqdm import tqdm
 now_dir = os.getcwd()
 sys.path.append(now_dir)
-import ffmpeg
 import os
 from typing import Any, Generator, List, Tuple, Union
 import numpy as np

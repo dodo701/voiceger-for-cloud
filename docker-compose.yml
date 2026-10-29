@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  tts-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voiceger-tts:latest
+    container_name: voiceger-tts-gen2
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - PYTHONUNBUFFERED=1
+      # Google Cloud Run Gen2 8코어 환경 타겟
+      - OMP_NUM_THREADS=8
+      - ORT_INTRA_OP_NUM_THREADS=8
+      # 로컬 가중치 오프라인 로드 보장
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
