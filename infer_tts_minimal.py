@@ -185,34 +185,74 @@ class ONNXT2SAdapter:
             )[0]
 
             # 2. First Stage Decoder (Prefill & KV-Cache 초기화)
-            y, k, v, y_emb, x_example = self.fsdec_session.run(
-                None, {"x": x, "prompts": prompts_np}
-            )
+            fsdec_io = self.fsdec_session.io_binding()
+            fsdec_io.bind_cpu_input("x", x)
+            fsdec_io.bind_cpu_input("prompts", prompts_np)
+            for out_name in ["y", "k", "v", "y_emb", "x_example"]:
+                fsdec_io.bind_output(out_name)
+
+            self.fsdec_session.run_with_iobinding(fsdec_io)
+            outputs = fsdec_io.get_outputs()
+
+            # Use raw OrtValues in C++ without fetching to Python
+            y, k, v, y_emb, x_example = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4]
 
             # 3. Stage Decoder (Autoregressive Step Loop)
             idx = 1
+            sdec_io_1 = self.sdec_session.io_binding()
+            sdec_io_2 = self.sdec_session.io_binding()
+            io_bindings = [sdec_io_1, sdec_io_2]
+
+            # Initial setup for io_1
+            sdec_io_1.bind_ortvalue_input("iy", y)
+            sdec_io_1.bind_ortvalue_input("ik", k)
+            sdec_io_1.bind_ortvalue_input("iv", v)
+            sdec_io_1.bind_ortvalue_input("iy_emb", y_emb)
+            sdec_io_1.bind_ortvalue_input("ix_example", x_example)
+            for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
+                sdec_io_1.bind_output(out_name)
+
             for idx in tqdm(range(1, 1500)):
-                y, k, v, y_emb, logits, samples = self.sdec_session.run(
-                    None,
-                    {
-                        "iy": y,
-                        "ik": k,
-                        "iv": v,
-                        "iy_emb": y_emb,
-                        "ix_example": x_example,
-                    },
-                )
+                io_curr = io_bindings[(idx - 1) % 2]
+                io_next = io_bindings[idx % 2]
+
+                self.sdec_session.run_with_iobinding(io_curr)
+                outputs = io_curr.get_outputs()
+
+                y, k, v, y_emb, logits, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4], outputs[5]
+
+                # Bind the newly produced OrtValues to the NEXT IOBinding object (Ping-Pong)
+                io_next.clear_binding_inputs()
+                io_next.clear_binding_outputs()
+
+                io_next.bind_ortvalue_input("iy", y)
+                io_next.bind_ortvalue_input("ik", k)
+                io_next.bind_ortvalue_input("iv", v)
+                io_next.bind_ortvalue_input("iy_emb", y_emb)
+                io_next.bind_ortvalue_input("ix_example", x_example)
+
+                for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
+                    io_next.bind_output(out_name)
+
+                y_shape = y.shape()
+
                 stop = False
-                if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
+                if early_stop_num != -1 and (y_shape[1] - prefix_len) > early_stop_num:
                     stop = True
-                if int(np.argmax(logits, axis=-1)[0]) == self.EOS or int(samples[0, 0]) == self.EOS:
+
+                # Fetch only small tensors for early stopping check
+                logits_np = logits.numpy()
+                samples_np = samples.numpy()
+
+                if int(np.argmax(logits_np, axis=-1)[0]) == self.EOS or int(samples_np[0, 0]) == self.EOS:
                     stop = True
                 if stop:
                     break
 
-            print(f"T2S ONNX Decoding EOS [{prefix_len} -> {y.shape[1]}]")
-            y[0, -1] = 0
-            pred_tokens = torch.from_numpy(y[0, -idx:].copy()).to(dtype=torch.long, device=device)
+            y_np = y.numpy()
+            print(f"T2S ONNX Decoding EOS [{prefix_len} -> {y_np.shape[1]}]")
+            y_np[0, -1] = 0
+            pred_tokens = torch.from_numpy(y_np[0, -idx:].copy()).to(dtype=torch.long, device=device)
             pred_semantic_list.append(pred_tokens)
             idx_list.append(idx)
 
