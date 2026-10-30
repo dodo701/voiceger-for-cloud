@@ -64,7 +64,7 @@ onnxruntime-openvino==1.24.1
 openvino-telemetry==2025.2.0
 openvino==2025.4.1
 packaging==26.3
-platformdirs==4.12.4
+platformdirs==4.13.5
 pooch==1.9.0
 proces==0.1.7
 propcache==0.5.4
