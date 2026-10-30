@@ -26,8 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 2. 의존성 파일 복사 및 설치 (CPU 전용 PyTorch 포함)
 COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip \
-    && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+RUN sed -i '/eunjeon/Id' requirements.txt && \
+    pip install --upgrade pip \
+        && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # 3. 런타임 외부 다운로드 원천 차단 (Pre-baking)
 # - NLTK 품사 태거 및 CMU 사전 다운로드 (/usr/local/share/nltk_data)
