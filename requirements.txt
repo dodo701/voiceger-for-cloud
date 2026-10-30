@@ -31,7 +31,7 @@ future==1.0.0
 g2p-en==2.1.0
 g2pk2==0.0.3
 hf-xet==1.7.0
-huggingface_hub==0.36.2
+huggingface-hub==2.4.0
 humanfriendly==10.0
 idna==3.20
 inflect==7.6.0
@@ -85,12 +85,12 @@ soundfile==0.14.0
 soxr==0.5.0.post1
 sympy==1.14.0
 threadpoolctl==3.7.0
-tokenizers==0.21.1
+tokenizers==0.23.3
 tools==1.0.38
 torch==2.11.0+cpu
 torchaudio==2.11.0+cpu
 tqdm==4.70.1
-transformers==4.51.3
+transformers==5.22.0
 typeguard==4.6.0
 typing_extensions==4.16.0
 tzdata==2026.5
