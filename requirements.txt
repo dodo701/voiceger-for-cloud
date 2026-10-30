@@ -65,7 +65,7 @@ proces==0.1.7
 propcache==0.5.4
 protobuf==7.36.2
 py3langid==0.2.2
-pycparser==3.11
+pycparser==3.12
 pyopenjtalk==0.4.1
 pyparsing==3.3.3
 pypinyin==0.54.0
