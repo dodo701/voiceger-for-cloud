@@ -2,7 +2,6 @@ import os
 import sys
 import math
 import platform
-import torch
 import soundfile as sf
 import onnxruntime as ort
 import numpy as np
@@ -22,7 +21,6 @@ sys.path.append(now_dir)
 sys.path.append(os.path.join(now_dir, "GPT_SoVITS"))
 
 from TTS_infer_pack.TTS import TTS, TTS_Config
-from tools.my_utils import load_audio
 
 
 def get_container_cpu_threads() -> int:
@@ -55,10 +53,8 @@ def get_container_cpu_threads() -> int:
     except Exception:
         pass
 
-    # 로컬 PC 환경 (Windows 노트북 등): 물리 코어 우선 계산
-    logical_cpus = os.cpu_count() or 2
-    if sys.platform == "win32":
-        return max(1, logical_cpus // 2)
+    # 로컬 PC 환경 (Windows 노트북 등): 가용 논리 CPU/스레드 수 전체 활용
+    logical_cpus = os.cpu_count() or 4
     return max(1, logical_cpus)
 
 
@@ -101,10 +97,13 @@ def get_onnx_providers(num_threads: int) -> list:
     if vendor == "intel" and "OpenVINOExecutionProvider" in available:
         if sys.platform == "win32":
             try:
-                import openvino  # noqa: F401
-                import onnxruntime.tools.add_openvino_win_libs as ov_utils
-                ov_utils.add_openvino_libs_to_path()
-            except (Exception, SystemExit):
+                import openvino
+                ov_libs_dir = os.path.join(os.path.dirname(openvino.__file__), "libs")
+                if os.path.isdir(ov_libs_dir):
+                    os.environ["PATH"] = ov_libs_dir + os.pathsep + os.environ.get("PATH", "")
+                    if hasattr(os, "add_dll_directory"):
+                        os.add_dll_directory(ov_libs_dir)
+            except Exception:
                 pass
         print(f"🚀 [Intel CPU 감지 ({num_threads} Threads)] OpenVINOExecutionProvider 가속을 활성화합니다!")
         return [
@@ -124,7 +123,7 @@ def get_onnx_providers(num_threads: int) -> list:
 
 
 class ONNXT2SAdapter:
-    """GPT(Text2Semantic) 3단계 분할 ONNX 모델(encoder, fsdec, sdec) 어댑터"""
+    """GPT(Text2Semantic) 3단계 분할 ONNX 모델(encoder, fsdec, sdec) 순수 NumPy 어댑터"""
 
     def __init__(self, enc_path: str, fsdec_path: str, sdec_path: str, providers: list, num_threads: int):
         print("⚡ C++ 백엔드 기반 Full ONNX GPT(T2S) 3단계 어댑터 세팅 중...")
@@ -156,21 +155,20 @@ class ONNXT2SAdapter:
         repetition_penalty: float = 1.35,
         **kwargs,
     ):
-        device = prompt.device if prompt is not None else torch.device("cpu")
-        prompts_np = prompt[:1].detach().cpu().numpy().astype(np.int64)
+        prompts_np = np.ascontiguousarray(prompt[:1], dtype=np.int64)
         prefix_len = prompts_np.shape[1]
 
         pred_semantic_list = []
         idx_list = []
 
         for ph_ids, bert_feat in zip(all_phoneme_ids, all_bert_features):
-            ph_np = ph_ids.detach().cpu().numpy().astype(np.int64)
-            bert_np = bert_feat.detach().cpu().numpy().astype(np.float32).T  # [L, 1024]
+            ph_np = np.asarray(ph_ids, dtype=np.int64)
+            bert_np = np.asarray(bert_feat, dtype=np.float32).T  # [L, 1024]
 
-            ref_seq = ph_np[:1][None, :]
-            text_seq = ph_np[1:][None, :]
-            ref_bert = bert_np[:1, :]
-            text_bert = bert_np[1:, :]
+            ref_seq = np.ascontiguousarray(ph_np[:1][None, :])
+            text_seq = np.ascontiguousarray(ph_np[1:][None, :])
+            ref_bert = np.ascontiguousarray(bert_np[:1, :])
+            text_bert = np.ascontiguousarray(bert_np[1:, :])
 
             # 1. T2S Encoder
             x = self.encoder_session.run(
@@ -203,15 +201,13 @@ class ONNXT2SAdapter:
             sdec_io_2 = self.sdec_session.io_binding()
             io_bindings = [sdec_io_1, sdec_io_2]
 
-            # logits를 바인딩 출력 대상에서 완전히 제외 (연산 및 복사 비용 절감)
-            target_outputs = ["y", "k", "v", "y_emb", "samples"]
-
+            # Initial setup for io_1
             sdec_io_1.bind_ortvalue_input("iy", y)
             sdec_io_1.bind_ortvalue_input("ik", k)
             sdec_io_1.bind_ortvalue_input("iv", v)
             sdec_io_1.bind_ortvalue_input("iy_emb", y_emb)
             sdec_io_1.bind_ortvalue_input("ix_example", x_example)
-            for out_name in target_outputs:
+            for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
                 sdec_io_1.bind_output(out_name)
 
             for idx in tqdm(range(1, 1500)):
@@ -221,13 +217,9 @@ class ONNXT2SAdapter:
                 self.sdec_session.run_with_iobinding(io_curr)
                 outputs = io_curr.get_outputs()
 
-                y, k, v, y_emb, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4]
+                y, k, v, y_emb, logits, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4], outputs[5]
 
-                # samples만 [1, 1] 스칼라로 빠르게 체크
-                if int(samples.numpy()[0, 0]) == self.EOS or (early_stop_num != -1 and idx > early_stop_num):
-                    break
-
-                # Next IO-Binding 핑퐁 세팅
+                # Bind the newly produced OrtValues to the NEXT IOBinding object (Ping-Pong)
                 io_next.clear_binding_inputs()
                 io_next.clear_binding_outputs()
 
@@ -237,55 +229,52 @@ class ONNXT2SAdapter:
                 io_next.bind_ortvalue_input("iy_emb", y_emb)
                 io_next.bind_ortvalue_input("ix_example", x_example)
 
-                for out_name in target_outputs:
+                for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
                     io_next.bind_output(out_name)
+
+                y_shape = y.shape()
+
+                stop = False
+                if early_stop_num != -1 and (y_shape[1] - prefix_len) > early_stop_num:
+                    stop = True
+
+                # Fetch only small tensors for early stopping check
+                logits_np = logits.numpy()
+                samples_np = samples.numpy()
+
+                if int(np.argmax(logits_np, axis=-1)[0]) == self.EOS or int(samples_np[0, 0]) == self.EOS:
+                    stop = True
+                if stop:
+                    break
 
             y_np = y.numpy()
             print(f"T2S ONNX Decoding EOS [{prefix_len} -> {y_np.shape[1]}]")
             y_np[0, -1] = 0
-            pred_tokens = torch.from_numpy(y_np[0, -idx:].copy()).to(dtype=torch.long, device=device)
+            pred_tokens = y_np[0, -idx:].copy().astype(np.int64)
             pred_semantic_list.append(pred_tokens)
             idx_list.append(idx)
 
         return pred_semantic_list, idx_list
 
-    def half(self):
-        return self
-
-    def float(self):
-        return self
-
-    def to(self, *args, **kwargs):
-        return self
-
-    def eval(self):
-        return self
-
 
 class ONNXVitsAdapter:
-    def __init__(self, vits_onnx_path: str, latent_onnx_path: str, ref_audio_sr: np.ndarray, providers: list, num_threads: int):
-        print("⚡ C++ 백엔드 기반 Full ONNX VITS 어댑터(Latent + Decoder) 세팅 중...")
+    def __init__(self, vits_onnx_path: str, providers: list, num_threads: int):
+        print("⚡ C++ 백엔드 기반 Full ONNX VITS 디코더 어댑터 세팅 중...")
         sess_options = create_ort_session_options(num_threads)
         self.vits_session = ort.InferenceSession(vits_onnx_path, sess_options=sess_options, providers=providers)
-        self.latent_session = ort.InferenceSession(latent_onnx_path, sess_options=sess_options, providers=providers)
         print(f"✅ 활성화된 VITS ONNX 프로바이더: {self.vits_session.get_providers()}")
 
         self.upsample_rates = [10, 8, 2, 2, 2]
-        self.ref_audio_sr = ref_audio_sr
+        self.ref_audio_sr = None
 
-    def extract_latent(self, x: torch.Tensor) -> torch.Tensor:
-        ssl_content = x.detach().cpu().float().numpy()
-        codes = self.latent_session.run(["codes"], {"ssl_content": ssl_content})[0]
-        return torch.from_numpy(codes).to(device=x.device, dtype=torch.long)
-
-    def decode(self, pred_semantic: torch.Tensor, text_seq: torch.Tensor, refer_audio_spec, speed: float = 1.0) -> torch.Tensor:
+    def decode(self, pred_semantic: np.ndarray, text_seq: np.ndarray, refer_audio_spec, speed: float = 1.0) -> np.ndarray:
         onnx_inputs = {
-            "text_seq": text_seq.detach().cpu().numpy(),
-            "pred_semantic": pred_semantic.detach().cpu().numpy(),
+            "text_seq": np.ascontiguousarray(text_seq, dtype=np.int64),
+            "pred_semantic": np.ascontiguousarray(pred_semantic, dtype=np.int64),
             "ref_audio": self.ref_audio_sr,
         }
         audio_onnx = self.vits_session.run(["audio"], onnx_inputs)[0]
-        return torch.from_numpy(audio_onnx).unsqueeze(0).unsqueeze(0).to(text_seq.device)
+        return audio_onnx
 
 
 class HybridTTS(TTS):
@@ -296,19 +285,37 @@ class HybridTTS(TTS):
         gpt_fsdec_path: str,
         gpt_sdec_path: str,
         vits_onnx_path: str,
-        latent_onnx_path: str,
-        ref_audio_sr: np.ndarray,
+        ref_cache_path: str,
         num_threads: int,
     ):
         self.gpt_enc_path = gpt_enc_path
         self.gpt_fsdec_path = gpt_fsdec_path
         self.gpt_sdec_path = gpt_sdec_path
         self.vits_onnx_path = vits_onnx_path
-        self.latent_onnx_path = latent_onnx_path
-        self.ref_audio_sr = ref_audio_sr
         self.num_threads = num_threads
         self.onnx_providers = get_onnx_providers(num_threads)
+
+        print(f"📦 사전 베이킹된 NumPy 레퍼런스 캐시 로드 중: {os.path.basename(ref_cache_path)}")
+        npz_data = np.load(ref_cache_path, allow_pickle=True)
+        self.ref_cache = {
+            "prompt_text": str(npz_data["prompt_text"].item() if npz_data["prompt_text"].ndim == 0 else npz_data["prompt_text"]),
+            "prompt_lang": str(npz_data["prompt_lang"].item() if npz_data["prompt_lang"].ndim == 0 else npz_data["prompt_lang"]),
+            "phones": npz_data["phones"].tolist(),
+            "bert_features": np.asarray(npz_data["bert_features"], dtype=np.float32),
+            "norm_text": str(npz_data["norm_text"].item() if npz_data["norm_text"].ndim == 0 else npz_data["norm_text"]),
+            "audios": npz_data["audios"].item(),
+        }
+
         super().__init__(configs)
+
+    def init_bert_weights(self, base_path: str):
+        print("🔪 중국어 전용 BERT(1.24GB) 로드를 건너뜁니다!")
+        self.bert_tokenizer = None
+        self.bert_model = None
+
+    def init_cnhuhbert_weights(self, base_path: str):
+        print("🔪 사전 베이킹 캐시(ref_cache.npz)를 사용하므로 CNHuBERT(360MB) 로드를 건너뜁니다!")
+        self.cnhuhbert_model = None
 
     def init_t2s_weights(self, weights_path: str):
         print("🔪 PyTorch GPT(.ckpt/.safetensors) 로드를 건너뛰고 Full ONNX GPT(Encoder + FSDec + SDec) 래퍼를 주입합니다!")
@@ -323,26 +330,50 @@ class HybridTTS(TTS):
         )
 
     def init_vits_weights(self, weights_path: str):
-        print("🔪 PyTorch VITS(.pth) 로드를 건너뛰고 Full ONNX(Latent + VITS) 래퍼를 주입합니다!")
+        print("🔪 PyTorch VITS(.pth) 및 Latent ONNX 로드를 건너뛰고 ONNX VITS 디코더 래퍼를 주입합니다!")
         self.configs.update_version("v2")
         self.vits_model = ONNXVitsAdapter(
             self.vits_onnx_path,
-            self.latent_onnx_path,
-            self.ref_audio_sr,
             self.onnx_providers,
             self.num_threads,
         )
 
-    def _set_ref_spec(self, ref_audio_path: str):
-        # ONNX VITS는 ref_audio_sr 배열을 직접 사용하므로 불필요한 PyTorch STFT 연산 생략
-        self.prompt_cache["refer_spec"] = [torch.empty(0)]
+    def set_ref_audio(self, ref_audio_path: str):
+        """오디오 파일 파싱 및 HuBERT 추론 대신 ref_cache.npz에서 즉시 NumPy 배열을 주입합니다."""
+        audios_dict = self.ref_cache["audios"]
+        basename = os.path.basename(ref_audio_path)
+        stem = os.path.splitext(basename)[0]
+
+        if ref_audio_path in audios_dict:
+            entry = audios_dict[ref_audio_path]
+        elif basename in audios_dict:
+            entry = audios_dict[basename]
+        elif stem in audios_dict:
+            entry = audios_dict[stem]
+        else:
+            available_keys = [k for k in audios_dict.keys() if k.endswith(".wav")]
+            raise KeyError(
+                f"캐시(ref_cache.npz)에서 '{ref_audio_path}'를 찾을 수 없습니다. "
+                f"사용 가능한 오디오: {available_keys}"
+            )
+
+        self.prompt_cache["ref_audio_path"] = ref_audio_path
+        self.prompt_cache["prompt_semantic"] = np.asarray(entry["prompt_semantic"], dtype=np.int64)
+        self.prompt_cache["refer_spec"] = [np.empty(0, dtype=np.float32)]
+        self.prompt_cache["prompt_text"] = self.ref_cache["prompt_text"]
+        self.prompt_cache["prompt_lang"] = self.ref_cache["prompt_lang"]
+        self.prompt_cache["phones"] = self.ref_cache["phones"]
+        self.prompt_cache["bert_features"] = self.ref_cache["bert_features"]
+        self.prompt_cache["norm_text"] = self.ref_cache["norm_text"]
+        self.vits_model.ref_audio_sr = np.asarray(entry["ref_audio_sr"], dtype=np.float32)
+        print(f"⚡ [캐시 히트] '{basename}' 특징 배열(NumPy) 즉시 로드 완료!")
 
 
 def main():
-    print("🚀 Full ONNX (ONNX GPT 3종 + ONNX VITS 2종 + Cloud Run Gen2 대응) 파이프라인 초기화 중...")
+    print("🚀 100% Pure NumPy + Full ONNX (PyTorch 제로 의존성) 파이프라인 초기화 중...")
 
     num_threads = get_container_cpu_threads()
-    torch.set_num_threads(num_threads)
+    os.environ["OMP_NUM_THREADS"] = str(num_threads)
 
     config_path = os.path.join(now_dir, "GPT_SoVITS", "configs", "tts_infer.yaml")
     config = TTS_Config(config_path)
@@ -351,15 +382,29 @@ def main():
 
     gpt_enc_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_encoder.onnx")
     gpt_fsdec_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_fsdec.onnx")
-    gpt_sdec_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec.onnx")
+    gpt_sdec_int8_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec_int8.onnx")
+    gpt_sdec_fp32_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec.onnx")
+
+    if os.path.exists(gpt_sdec_int8_path):
+        gpt_sdec_path = gpt_sdec_int8_path
+        print(f"📦 [INT8 양자화 모델 감지] 8비트 경량화 디코더를 로드합니다: {os.path.basename(gpt_sdec_int8_path)}")
+    else:
+        gpt_sdec_path = gpt_sdec_fp32_path
+        print(f"📦 [FP32 기본 모델 감지] 원본 디코더를 로드합니다: {os.path.basename(gpt_sdec_fp32_path)}")
+
     onnx_vits_path = os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
-    onnx_latent_path = os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_latent.onnx")
+    ref_cache_path = os.path.join(now_dir, "reference_audios", "ref_cache.npz")
+
+    if not os.path.exists(ref_cache_path):
+        raise FileNotFoundError(
+            f"사전 베이킹 캐시 파일이 없습니다: {ref_cache_path}\n"
+            f"먼저 'python preload.py'를 실행하여 캐시를 생성해주세요."
+        )
 
     config.t2s_weights_path = gpt_sdec_path
     config.vits_weights_path = onnx_vits_path
 
     ref_audio_path = os.path.join(now_dir, "reference_audios", "01_ref_emoNormal026.wav")
-    ref_audio_sr = np.expand_dims(load_audio(ref_audio_path, config.sampling_rate), axis=0)
 
     print("📦 프론트엔드 및 Full ONNX (GPT + VITS) 엔진 로딩 중...")
     tts_pipeline = HybridTTS(
@@ -368,8 +413,7 @@ def main():
         gpt_fsdec_path,
         gpt_sdec_path,
         onnx_vits_path,
-        onnx_latent_path,
-        ref_audio_sr,
+        ref_cache_path,
         num_threads,
     )
 
@@ -377,14 +421,15 @@ def main():
         "text": "야호! 나는 즌다몬인 거시다! 오늘은 내 한국어 목소리를 테스트해서, 여러 모델을 비교해 본다고 들은 거시다. 후훗, 어떤 내 목소리가 제일 귀엽고, 즌다모찌에 대한 사랑을 잘 표현하는지 똑똑히 들어보란 거시다!",
         "text_lang": "ko",
         "ref_audio_path": ref_audio_path,
-        "prompt_text": "私はいつもミネラルウォーターを持ち歩いています。",
-        "prompt_lang": "ja",
+        "prompt_text": tts_pipeline.ref_cache["prompt_text"],
+        "prompt_lang": tts_pipeline.ref_cache["prompt_lang"],
         "top_k": 15,
         "top_p": 1.0,
         "temperature": 1.0,
         "text_split_method": "cut2",
     }
 
+    print(f"🔍 [런타임 무결성 검증] PyTorch(torch) 모듈 로드 여부: {'torch' in sys.modules} (False여야 순수 NumPy)")
     print("🧠 실시간 음성 합성 진행 중...")
 
     output_audio = None
@@ -401,7 +446,8 @@ def main():
     if output_audio is not None:
         output_path = "zundamon_hybrid_final.wav"
         sf.write(output_path, output_audio, sample_rate)
-        print(f"🎉 합성 대성공! 콜드 스타트와 렌더링 병목이 모두 해결된 '{output_path}'가 생성되었습니다.")
+        print(f"🎉 합성 대성공! PyTorch 없이 100% 순수 NumPy + ONNX로 '{output_path}'가 생성되었습니다.")
+        print(f"🔍 [최종 무결성 검증] 추론 완료 후 PyTorch(torch) 로드 여부: {'torch' in sys.modules}")
         profiler.disable()  # 기록 종료
         profiler.dump_stats("tts_inference.prof")  # 결과 파일로 저장
         print("✅ 프로파일링 완료! tts_inference.prof 저장됨.")

@@ -1,11 +1,27 @@
-/venv
-cd /workspaces/voiceger_v2
-cat << 'EOF' >> .gitignore
+# Virtual Environment
+venv/
+.venv/
+env/
 
-# Python 캐시 전체 무시
+# Python 캐시
 **/__pycache__/
 __pycache__/
 *.py[cod]
 *$py.class
-EOF
-*$.prof
+
+# 프로파일러 및 덤프 파일
+*.prof
+*.pstats
+*.profile
+
+# 생성된 오디오 파일 (레퍼런스 원본 오디오는 유지)
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.aac
+*.m4a
+!reference_audios/*.wav
+
+# 로그 파일
+*.log

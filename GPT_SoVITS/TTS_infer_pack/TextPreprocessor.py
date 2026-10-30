@@ -3,15 +3,9 @@ import sys
 import re
 from typing import Dict, List, Tuple, Callable
 from tqdm import tqdm
-import torch
+import numpy as np
 import LangSegment
-from transformers import AutoModelForMaskedLM, AutoTokenizer
-from tools.i18n.i18n import I18nAuto, scan_language_list
 from text.symbols2 import symbols as symbols_v2
-
-language = os.environ.get("language", "Auto")
-language = sys.argv[-1] if sys.argv[-1] in scan_language_list() else language
-i18n = I18nAuto(language=language)
 
 # ==============================================================================
 # Symbols & Sequence Mapping (symbols2)
@@ -492,21 +486,20 @@ def clean_text_direct(text: str, language: str, version: str = "v2"):
 
 
 # ==============================================================================
-# TextPreprocessor Class
+# TextPreprocessor Class (100% Pure NumPy)
 # ==============================================================================
 class TextPreprocessor:
-    def __init__(self, bert_model: AutoModelForMaskedLM,
-                 tokenizer: AutoTokenizer, device: torch.device):
+    def __init__(self, bert_model=None, tokenizer=None, device: str = "cpu"):
         self.bert_model = bert_model
         self.tokenizer = tokenizer
         self.device = device
 
     def preprocess(self, text: str, lang: str, text_split_method: str, version: str = "v2") -> List[Dict]:
-        print(i18n("############ 切分文本 ############"))
+        print("############ 텍스트 분할 ############")
         text = replace_consecutive_punctuation(text)
         texts = self.pre_seg_text(text, lang, text_split_method)
         result = []
-        print(i18n("############ 提取文本Bert特征 ############"))
+        print("############ 텍스트 특징 추출 ############")
         for t in tqdm(texts):
             phones, bert_features, norm_text = self.segment_and_extract_feature_for_text(t, lang, version)
             if phones is None or norm_text == "":
@@ -525,7 +518,7 @@ class TextPreprocessor:
             return []
         if (text[0] not in splits and len(get_first(text)) < 4):
             text = "。" + text if lang != "en" else "." + text
-        print(i18n("实际输入的目标文本:"))
+        print("실제 입력된 목표 텍스트:")
         print(text)
 
         seg_method = get_method(text_split_method)
@@ -551,11 +544,11 @@ class TextPreprocessor:
             else:
                 texts.append(item)
 
-        print(i18n("实际输入的目标文本(切句后):"))
+        print("실제 입력된 목표 텍스트(문장 분리 후):")
         print(texts)
         return texts
 
-    def segment_and_extract_feature_for_text(self, text: str, language: str, version: str = "v2") -> Tuple[list, torch.Tensor, str]:
+    def segment_and_extract_feature_for_text(self, text: str, language: str, version: str = "v2") -> Tuple[list, np.ndarray, str]:
         return self.get_phones_and_bert(text, language, version)
 
     def get_phones_and_bert(self, text: str, language: str, version: str = "v2", final: bool = False):
@@ -565,9 +558,8 @@ class TextPreprocessor:
         if language.startswith("all_") or clean_lang in {"ja", "ko"}:
             has_english = bool(re.search(r'[a-zA-Z]', text))
             if not has_english or language.startswith("all_"):
-                # Complete bypass of LangSegment! Eliminates punctuation misclassification entirely
                 phones, word2ph, norm_text = self.clean_text_inf(text, clean_lang, version)
-                bert = torch.zeros((1024, len(phones)), dtype=torch.float32).to(self.device)
+                bert = np.zeros((1024, len(phones)), dtype=np.float32)
                 if not final and len(phones) < 6:
                     return self.get_phones_and_bert("." + text, language, version, final=True)
                 return phones, bert, norm_text
@@ -578,11 +570,9 @@ class TextPreprocessor:
         LangSegment.setfilters(["ja", "en", "ko"])
         for tmp in LangSegment.getTexts(text):
             seg_text = tmp["text"]
-            # CRITICAL FIX: Only treat as English if actual English letters are present!
             if tmp["lang"] == "en" and re.search(r'[a-zA-Z]', seg_text):
                 langlist.append("en")
             else:
-                # Retain primary target language (ko or ja), preventing '.' / '。' from becoming 'en'
                 langlist.append(clean_lang if clean_lang in {"ja", "ko"} else tmp["lang"])
             textlist.append(seg_text)
 
@@ -597,7 +587,7 @@ class TextPreprocessor:
             norm_text_list.append(norm_text)
             bert_list.append(bert)
 
-        bert = torch.cat(bert_list, dim=1) if bert_list else torch.zeros((1024, 0), dtype=torch.float32).to(self.device)
+        bert = np.concatenate(bert_list, axis=1) if bert_list else np.zeros((1024, 0), dtype=np.float32)
         phones = sum(phones_list, [])
         norm_text = ''.join(norm_text_list)
 
@@ -612,13 +602,12 @@ class TextPreprocessor:
         return phones, word2ph, norm_text
 
     def get_bert_inf(self, phones: list, word2ph: list, norm_text: str, language: str):
-        # Non-Chinese models do not require BERT features; zeros are used
-        return torch.zeros((1024, len(phones)), dtype=torch.float32).to(self.device)
+        return np.zeros((1024, len(phones)), dtype=np.float32)
 
     def filter_text(self, texts):
         _text = []
         if all(text in [None, " ", "\n", ""] for text in texts):
-            raise ValueError(i18n("请输入有效文本"))
+            raise ValueError("유효한 텍스트를 입력하세요")
         for text in texts:
             if text not in [None, " ", ""]:
                 _text.append(text)

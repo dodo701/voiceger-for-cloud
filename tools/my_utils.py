@@ -3,18 +3,6 @@ import traceback
 import numpy as np
 import soundfile as sf
 import soxr
-from tools.i18n.i18n import I18nAuto
-
-i18n = I18nAuto(language=os.environ.get("language", "Auto"))
-
-
-class GradioMock:
-    @staticmethod
-    def Warning(message):
-        print(f"警告: {message}")
-
-
-gr = GradioMock()
 
 
 def load_audio(file, sr):
@@ -31,7 +19,7 @@ def load_audio(file, sr):
             audio = soxr.resample(audio, orig_sr, sr)
     except Exception:
         traceback.print_exc()
-        raise RuntimeError(i18n("音频加载失败"))
+        raise RuntimeError("오디오 로드 실패")
 
     return np.asarray(audio, dtype=np.float32).flatten()
 
