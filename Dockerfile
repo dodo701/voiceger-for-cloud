@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 의존성 파일 복사 및 설치 (CPU 전용 PyTorch 포함)
-COPY requirements_final.txt /app/requirements_final.txt
+COPY requirements_final.txt /app/requirements.txt
 RUN pip install --upgrade pip \
     && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements_final.txt
 
