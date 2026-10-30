@@ -69,7 +69,7 @@ pooch==1.9.0
 proces==0.1.7
 propcache==0.5.4
 protobuf==7.36.2
-py3langid==0.2.2
+py3langid==0.4.0
 pycparser==3.11
 pyopenjtalk==0.4.1
 pyparsing==3.3.3
