@@ -92,7 +92,7 @@ sympy==1.14.0
 threadpoolctl==3.7.0
 tokenizers==0.21.1
 tools==1.0.38
-torch==2.11.0+cpu
+torch==2.14.1
 torchaudio==2.11.0+cpu
 tqdm==4.70.1
 transformers==4.51.3
