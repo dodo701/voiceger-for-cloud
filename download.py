@@ -11,6 +11,8 @@ downloads = [
     ("zundamon_vits.onnx", "SoVITS_weights_v2"),
     ("zundamon_t2s_sdec.onnx", "GPT_weights_v2"),
     ("zundamon_t2s_fsdec.onnx", "GPT_weights_v2"),
+    ("zundamon_latent.onnx", "SoVITS_weights_v2"),
+    
 ]
 
 for f in files:
@@ -25,7 +27,7 @@ def sanitize_downloaded_filename(file_name):
     lower_ext = ext.lower()
 
     if lower_ext in (".safetensors", ".safetensor"):
-        return "models" + ext
+        return "model" + ext
 
     if "-" in name:
         name = name.split("-", 1)[1]

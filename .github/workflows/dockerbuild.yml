@@ -1,0 +1,28 @@
+name: Docker Build and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker Image
+      run: |
+        docker build -t voiceger-app:test .
+
+    - name: Run TTS Inference Test
+      run: |
+        # Dockerfile에 FastAPI 서버 실행 등의 ENTRYPOINT가 설정되어 있을 수 있으므로,
+        # --entrypoint를 python으로 강제 지정하여 테스트 스크립트만 실행하고 컨테이너를 종료시킵니다.
+        docker run --rm --entrypoint python voiceger-app:test infer_tts_minimal.py

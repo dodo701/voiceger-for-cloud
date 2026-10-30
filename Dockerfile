@@ -7,7 +7,9 @@ FROM python:3.11-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    NLTK_DATA=/usr/local/share/nltk_data
+    NLTK_DATA=/usr/local/share/nltk_data \
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_BREAK_SYSTEM_PACKAGES=1
 
 WORKDIR /app
 
@@ -23,9 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 의존성 파일 복사 및 설치 (CPU 전용 PyTorch 포함)
-COPY requirements_final.txt /app/requirements_final.txt
-RUN pip install --upgrade pip \
-    && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements_final.txt
+COPY requirements.txt /app/requirements.txt
+RUN sed -i '/eunjeon/Id' requirements.txt && \
+    pip install --upgrade pip \
+        && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # 3. 런타임 외부 다운로드 원천 차단 (Pre-baking)
 # - NLTK 품사 태거 및 CMU 사전 다운로드 (/usr/local/share/nltk_data)
@@ -47,14 +50,17 @@ RUN python download.py
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
-# 7. 일본어 커스텀 사용자 사전(user.dict) 심볼릭 링크 사전 연결
+# 7. 일본어 사전 심볼릭 링크 연결 및 LangSegment 패키지 오류 패치
 RUN python -c "\
 import os, pyopenjtalk; \
-mecab_dir = os.path.dirname(pyopenjtalk.OPEN_JTALK_DICT_DIR); \
+dict_dir = pyopenjtalk.OPEN_JTALK_DICT_DIR; \
+dict_dir = dict_dir.decode('utf-8') if isinstance(dict_dir, bytes) else dict_dir; \
+mecab_dir = os.path.dirname(dict_dir); \
 target = os.path.join(mecab_dir, 'user.dict'); \
 src = '/app/GPT_SoVITS/text/ja_userdic/user.dict'; \
 (os.remove(target) if os.path.exists(target) or os.path.islink(target) else None); \
-os.symlink(src, target) if os.path.exists(src) else None"
+os.symlink(src, target) if os.path.exists(src) else None" && \
+    python -c "import site, os; p = os.path.join(site.getsitepackages()[0], 'LangSegment', '__init__.py'); open(p, 'w').write(open(p).read().replace('setLangfilters,getLangfilters,', ''))"
 
 # Cloud Run 기본 포트
 ENV PORT=8080
