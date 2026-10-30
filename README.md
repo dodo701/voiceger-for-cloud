@@ -1,4 +1,6 @@
-# Voiceger WebUI(lightweighted version!)
+language : [english](https://github.com/dodo701/voiceger-for-cloud/blob/main/README.md) [korean](https://github.com/dodo701/voiceger-for-cloud/blob/main/README_ko.md)
+
+# Voiceger For cloud services!
 
 This repository provides an removed streamlit and safetensors inference version of voiceger V2. The mission is to remove overhead and maximizing tts inference speed on cpu.
 This repository is the fork of voiceger-v2, which created by zunzun999 and yh00072.
@@ -34,7 +36,7 @@ After installing the dependencies, install PyTorch and its companion packages. B
 
 The following versions are tested and verified to work successfully:
 
-- **PyTorch and torchAudio**: `2.11.0+cpu
+- **PyTorch and torchAudio**: `2.11.0+cpu`
 - **CUDA**: removed.
 - **Python**: `3.9`
 - **onnx with OPENvino**: `1.24.1`
@@ -109,25 +111,13 @@ This will ensure the necessary NLTK resources are downloaded.
 
 For more installation information of pretrained models, please refer to the following resources:
 - [GPT-SoVITS Official Repo](https://github.com/RVC-Boss/GPT-SoVITS)
-- [RVC WebUI Official Repo](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)
 
 
 ## How to Use the WebUI(deprecated.)
 since this repository is created for fast voice processing in non-gpu server, webui will not be supported. use infer_tts_minimal.py for substitution.
 
-I will create a new branch with webui is supported.
+I will soonly create a new branch with webui is supported.
 
-1. Navigate to the project directory:
-
-```bash
-cd voiceger-webui
-```
-
-2. Run the WebUI (this starts Streamlit and serves GPT-SoVITS’ `zundamon_webui.py`):
-
-```bash
-python voiceger.py
-```
 ## How to Generate Zundamon's Voice Audio
 
 1. Select Emotion
