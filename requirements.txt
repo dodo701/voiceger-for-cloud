@@ -95,7 +95,7 @@ tools==1.0.38
 torch==2.11.0+cpu
 torchaudio==2.11.0+cpu
 tqdm==4.70.1
-transformers==4.51.3
+transformers==5.10.1
 typeguard==4.6.0
 typing_extensions==4.16.0
 tzdata==2026.5
