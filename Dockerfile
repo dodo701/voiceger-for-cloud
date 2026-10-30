@@ -50,7 +50,9 @@ ENV HF_HUB_OFFLINE=1 \
 # 7. 일본어 커스텀 사용자 사전(user.dict) 심볼릭 링크 사전 연결
 RUN python -c "\
 import os, pyopenjtalk; \
-mecab_dir = os.path.dirname(pyopenjtalk.OPEN_JTALK_DICT_DIR); \
+dict_dir = pyopenjtalk.OPEN_JTALK_DICT_DIR; \
+dict_dir = dict_dir.decode('utf-8') if isinstance(dict_dir, bytes) else dict_dir; \
+mecab_dir = os.path.dirname(dict_dir); \
 target = os.path.join(mecab_dir, 'user.dict'); \
 src = '/app/GPT_SoVITS/text/ja_userdic/user.dict'; \
 (os.remove(target) if os.path.exists(target) or os.path.islink(target) else None); \
