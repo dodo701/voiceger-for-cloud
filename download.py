@@ -11,6 +11,8 @@ downloads = [
     ("zundamon_vits.onnx", "SoVITS_weights_v2"),
     ("zundamon_t2s_sdec.onnx", "GPT_weights_v2"),
     ("zundamon_t2s_fsdec.onnx", "GPT_weights_v2"),
+    ("zundamon_latent.onnx", "SoVITS_weights_v2"),
+    
 ]
 
 for f in files:
