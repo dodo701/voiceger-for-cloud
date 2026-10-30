@@ -7,7 +7,9 @@ FROM python:3.11-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    NLTK_DATA=/usr/local/share/nltk_data
+    NLTK_DATA=/usr/local/share/nltk_data \
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_BREAK_SYSTEM_PACKAGES=1
 
 WORKDIR /app
 
@@ -47,7 +49,7 @@ RUN python download.py
 ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
-# 7. 일본어 커스텀 사용자 사전(user.dict) 심볼릭 링크 사전 연결
+# 7. 일본어 사전 심볼릭 링크 연결 및 LangSegment 패키지 오류 패치
 RUN python -c "\
 import os, pyopenjtalk; \
 dict_dir = pyopenjtalk.OPEN_JTALK_DICT_DIR; \
@@ -56,7 +58,8 @@ mecab_dir = os.path.dirname(dict_dir); \
 target = os.path.join(mecab_dir, 'user.dict'); \
 src = '/app/GPT_SoVITS/text/ja_userdic/user.dict'; \
 (os.remove(target) if os.path.exists(target) or os.path.islink(target) else None); \
-os.symlink(src, target) if os.path.exists(src) else None"
+os.symlink(src, target) if os.path.exists(src) else None" && \
+    python -c "import site, os; p = os.path.join(site.getsitepackages()[0], 'LangSegment', '__init__.py'); open(p, 'w').write(open(p).read().replace('setLangfilters,getLangfilters,', ''))"
 
 # Cloud Run 기본 포트
 ENV PORT=8080
