@@ -1,50 +1,44 @@
 # Voiceger WebUI(lightweighted version!)
 
-This repository provides an removed streamlit and safetensors inference version of voiceger V2. The mission is to remove overhead and maximizing tts inference speed.
+This repository provides an removed streamlit and safetensors inference version of voiceger V2. The mission is to remove overhead and maximizing tts inference speed on cpu.
 This repository is the fork of voiceger-v2, which created by zunzun999 and yh00072.
 
 ## why this fork?
 
-1. voiceger v2 uses very cpu-demanding models(cnhubert-roberta,bert), the cpu-only inference speed is extremely low.
-2. this repository has not been updated since 2025. i'll modernize the dependency updating 2026 python and enhance efficiency.
-3. also, i will package this repository by docker. whisch allows to be deployed on cloud developement or servers.
+1. voiceger v2 uses very cpu-demanding models(cnhubert-roberta,bert,gpt and sovits), the cpu-only inference speed is extremely low.
+2. this repository has not been updated since 2025. i'll modernize the dependency by applying upstream changes and enhance efficiency.
+3. also, i will package this repository by docker. whisch allows to be easily deployed on cloud developement or servers.
 
 ## Overview
 
-This project is based on [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) and [RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) and has been adapted and fine-tuned for Zundamon's voice synthesis. The WebUI for inference is built using Streamlit, providing a user-friendly interface for generating Zundamon's speech audio files.
+This project is based on [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) and has been adapted and fine-tuned for Zundamon's voice synthesis.
 
 ## Features
 
-1. Unified Streamlit WebUI for both TTS (GPT-SoVITS) and Voice Conversion (RVC).
+1. Has CLI Tools for fast synthesis.
 2. Emotion/style presets for TTS: select a Zundamon emotion, enter text, and generate audio; multilingual input is supported.
-3. Bundled Zundamon models: GPT and SoVITS weights auto-loaded for high-quality synthesis.
-4. Integrated RVC: convert vocals-only input to Zundamon’s voice.
+3. converted BERT and Hubert model with **safetensors** format and GPT and SoVITS model with **ONNX** for faster CPU inference. 
 
 ## Prerequisites
 
 Before starting, ensure you have the required dependencies installed:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements_final.txt
 ```
-- Notice: This app integrates two upstream projects (GPT-SoVITS for TTS and RVC-WebUI for Voice Conversion). You can also refer to the original environment setup guides.
+- Notice: You have to install Cmake since pyopenjtalk requires to build wheel.
+- If you don't use any GPU for inference, install torch with extra index.
+  
 
 After installing the dependencies, install PyTorch and its companion packages. Both `torchvision` and `torchaudio` are required.
 
 The following versions are tested and verified to work successfully:
 
-- **PyTorch and torchAudio**: `2.11.0+cpu`
-- **CUDA**: removed
+- **PyTorch and torchAudio**: `2.11.0+cpu
+- **CUDA**: removed.
 - **Python**: `3.9`
-- **onnx with OPENvino**: '1.24.1'
-
-You can install it using the [following command](https://pytorch.org/get-started/previous-versions/#linux-and-windows-19):
-
-```bash
-pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
-```
-
-For other installation options, please visit the official [PyTorch website](https://pytorch.org/get-started/previous-versions/).
+- **onnx with OPENvino**: `1.24.1`
+- **transformers**
 
 ## Setup Instructions
 
@@ -53,75 +47,27 @@ For other installation options, please visit the official [PyTorch website](http
 To ensure all required submodules are initialized properly, use the following command:
 
 ```bash
-git clone https://github.com/zunzun999/voiceger_v2.git
+git clone https://github.com/dodo701/voiceger_v2.git
 cd voiceger_v2
 ```
 
 ### Step 2: Download Pretrained Models for TTS function
 
-1. **Download GPT-SoVITS Pretrained Models**: Place the pretrained models in the `GPT-SoVITS/GPT_SoVITS/pretrained_models` folder:
+**Download GPT-SoVITS Pretrained Models and Zundamon finetuned models**
     - Use the following commands to download and set up the models:
         
         ```bash
-        git lfs install
+        (enable venv in python.)
+        python download.py
         ```
+    
+    -This script will automatically download **all** models in right directories.
+    -for more information about the models, visit [my huggingface repository!](https://huggingface.co/Geukrak/onnx_zundamon):
+      
 
-        ```bash
-        git clone https://huggingface.co/lj1995/GPT-SoVITS
-        ```
-2. **Download G2PW Models**: Download and unzip the G2PW models from [G2PWModel_1.1.zip](https://paddlespeech.bj.bcebos.com/Parakeet/released_models/g2p/G2PWModel_1.1.zip), rename the folder to `G2PWModel`, and place it in `GPT-SoVITS/GPT_SoVITS/text`.
-3. **Download Zundamon Fine-Tuned Model**:
-Download the [fine-tuned models](https://huggingface.co/zunzunpj/zundamon_GPT-SoVITS/tree/main) for Zundamon and place them in the `zundamon-speech-webui/GPT-SoVITS` folder:
-    - Fine-tuned models include `GPT_weights_v2` and `SoVITS_weights_v2`.
-    - Use the following commands to download and set up the models:
-        
-        ```bash
-        git clone https://huggingface.co/zunzunpj/zundamon_GPT-SoVITS
-        ```
+#### Install ffmpeg(not needed actually.)
 
-### Step 3: Download Pretrained Models for Voice Conversion function
-
-Prepare pretrained assets under `voiceger-webui/GPT-SoVITS/Retrieval-based-Voice-Conversion-WebUI`. Voice Conversion uses RVC and requires additional assets and fine-tuned indices and weights. 
-
-#### Download assets
-
-RVC requires additional pretrained assets for inference and optional training.
-You can download them from original repo [Hugging Face space](https://huggingface.co/lj1995/VoiceConversionWebUI/tree/main/).
-The following list contains all RVC-required pretrained models and supplemental files. You can find a helper script for downloading them at:
-`voiceger-webui/GPT-SoVITS/Retrieval-based-Voice-Conversion-WebUI/tools/download_models.py`
-
-- `assets/hubert/hubert_base.pt`
-- `assets/pretrained`
-- `assets/uvr5_weights`
-- `assets/pretrained_v2`
-
-#### Install ffmpeg
-
-If `ffmpeg` and `ffprobe` are already installed, you can skip this step.
-
-- Ubuntu/Debian:
-```bash
-sudo apt install ffmpeg
-```
-- macOS:
-```bash
-brew install ffmpeg
-```
-- Windows:
-Download and place:
-- [ffmpeg.exe](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/ffmpeg.exe)
-- [ffprobe.exe](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/ffprobe.exe)
-
-Place them in the root directory of `voiceger-webui/GPT-SoVITS`.
-
-#### Download RMVPE (Pitch Extraction)
-
-To use the RMVPE pitch extraction algorithm, download the model weights and place them at the `assets/rmvpe` folder:
-
-- [rmvpe.pt](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.pt)
-
-Optional DML environment (AMD/Intel users):
-- [rmvpe.onnx](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.onnx)
+no ffmpeg install needed! (this software uses soundfile and soxr to process audio.)
 
 #### Fine-Tuned Models
 If you have fine-tuned indices and weights, place:
@@ -166,7 +112,10 @@ For more installation information of pretrained models, please refer to the foll
 - [RVC WebUI Official Repo](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)
 
 
-## How to Use the WebUI
+## How to Use the WebUI(deprecated.)
+since this repository is created for fast voice processing in non-gpu server, webui will not be supported. use infer_tts_minimal.py for substitution.
+
+I will create a new branch with webui is supported.
 
 1. Navigate to the project directory:
 
@@ -179,12 +128,6 @@ cd voiceger-webui
 ```bash
 python voiceger.py
 ```
-
-3. Open the WebUI in your browser (Streamlit will print the local URL in the terminal).
-![Zundamon WebUI Example](imgs/main_1.PNG)
-![Zundamon WebUI Example](imgs/main_2.PNG)
-
-
 ## How to Generate Zundamon's Voice Audio
 
 1. Select Emotion
@@ -196,21 +139,12 @@ python voiceger.py
 4. Generate Audio
     - Click the **Generate Speech** button. After processing, preview the audio and use the download button to save the result.
 
-## Convert an Audio File to Zundamon’s Voice
-
-- Input requirement: Provide a vocals-only audio file (no background music). If you only have a mixed track, separate vocals first for best results.
-- Upload audio: Choose your vocals-only file.
-- Parameters: Leave parameters at their defaults for a sensible starting point.
-- Pitch extraction (optional): If the converted voice sounds off, try a different pitch extraction algorithm (CREPE).
-- Output: Click the **Convert Voice** button. After processing, preview the audio and use the download button to save the result.
-
 ## License Information
 
 This software includes the following open-source software:
 
 - [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) (MIT License)
 - [GPT-SoVITS Pretrained Models](https://huggingface.co/lj1995/GPT-SoVITS) (MIT License)
-- [G2PW Model](https://github.com/GitYCC/g2pW) (Apache 2.0 License)
 - [UVR5 (Voice Cleaning)](https://huggingface.co/lj1995/VoiceConversionWebUI/tree/main/uvr5_weights) (MIT License)
 - [Faster Whisper Large V3](https://huggingface.co/Systran/faster-whisper-large-v3) (MIT License)
 - [RVC WebUI Official Repo](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT License)
@@ -220,6 +154,5 @@ These are provided under their respective license terms.
 
 The license for the Zundamon Voice model is as follows:
 https://zunko.jp/con_ongen_kiyaku.html
-
 
 
