@@ -27,7 +27,7 @@ def sanitize_downloaded_filename(file_name):
     lower_ext = ext.lower()
 
     if lower_ext in (".safetensors", ".safetensor"):
-        return "models" + ext
+        return "model" + ext
 
     if "-" in name:
         name = name.split("-", 1)[1]
