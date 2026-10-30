@@ -203,13 +203,15 @@ class ONNXT2SAdapter:
             sdec_io_2 = self.sdec_session.io_binding()
             io_bindings = [sdec_io_1, sdec_io_2]
 
-            # Initial setup for io_1
+            # logits를 바인딩 출력 대상에서 완전히 제외 (연산 및 복사 비용 절감)
+            target_outputs = ["y", "k", "v", "y_emb", "samples"]
+
             sdec_io_1.bind_ortvalue_input("iy", y)
             sdec_io_1.bind_ortvalue_input("ik", k)
             sdec_io_1.bind_ortvalue_input("iv", v)
             sdec_io_1.bind_ortvalue_input("iy_emb", y_emb)
             sdec_io_1.bind_ortvalue_input("ix_example", x_example)
-            for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
+            for out_name in target_outputs:
                 sdec_io_1.bind_output(out_name)
 
             for idx in tqdm(range(1, 1500)):
@@ -219,9 +221,13 @@ class ONNXT2SAdapter:
                 self.sdec_session.run_with_iobinding(io_curr)
                 outputs = io_curr.get_outputs()
 
-                y, k, v, y_emb, logits, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4], outputs[5]
+                y, k, v, y_emb, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4]
 
-                # Bind the newly produced OrtValues to the NEXT IOBinding object (Ping-Pong)
+                # samples만 [1, 1] 스칼라로 빠르게 체크
+                if int(samples.numpy()[0, 0]) == self.EOS or (early_stop_num != -1 and idx > early_stop_num):
+                    break
+
+                # Next IO-Binding 핑퐁 세팅
                 io_next.clear_binding_inputs()
                 io_next.clear_binding_outputs()
 
@@ -231,23 +237,8 @@ class ONNXT2SAdapter:
                 io_next.bind_ortvalue_input("iy_emb", y_emb)
                 io_next.bind_ortvalue_input("ix_example", x_example)
 
-                for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
+                for out_name in target_outputs:
                     io_next.bind_output(out_name)
-
-                y_shape = y.shape()
-
-                stop = False
-                if early_stop_num != -1 and (y_shape[1] - prefix_len) > early_stop_num:
-                    stop = True
-
-                # Fetch only small tensors for early stopping check
-                logits_np = logits.numpy()
-                samples_np = samples.numpy()
-
-                if int(np.argmax(logits_np, axis=-1)[0]) == self.EOS or int(samples_np[0, 0]) == self.EOS:
-                    stop = True
-                if stop:
-                    break
 
             y_np = y.numpy()
             print(f"T2S ONNX Decoding EOS [{prefix_len} -> {y_np.shape[1]}]")
