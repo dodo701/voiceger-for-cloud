@@ -30,7 +30,6 @@ cache/
 # 오프라인 개발/변환 도구 및 디버그 스크립트 제외 (컨테이너 경량화)
 # ==============================================================================
 preload.py
-onnx_export.py
 onnx_quntization.py
 debug.py
 requirements-dev.txt

@@ -252,6 +252,14 @@ class ONNXVitsAdapter:
         return audio_onnx
 
 
+def is_quantization_enabled() -> bool:
+    """시스템 환경변수 enable_quantization(대소문자 무관)을 읽어 INT8 sdec 사용 여부를 반환합니다. 기본값: OFF."""
+    raw = os.environ.get("enable_quantization")
+    if raw is None:
+        raw = os.environ.get("ENABLE_QUANTIZATION", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def configure_random_seed(seed: int = None) -> int:
     """글로벌 난수 시드를 설정하고 콘솔/로그에 출력합니다."""
     if seed is None or seed == -1 or seed == "":
@@ -278,7 +286,8 @@ class ZundamonTTSEngine:
         num_threads: int = None,
         seed: int = None,
     ):
-        self.lock = threading.Lock()
+        # RLock: set_seed()가 락을 잡은 채 warmup() -> generate_sentence_with_latency()를 재호출하므로 재진입 필수
+        self.lock = threading.RLock()
         self.num_threads = num_threads or get_container_cpu_threads()
         os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
         self.onnx_providers = get_onnx_providers(self.num_threads)
@@ -292,7 +301,16 @@ class ZundamonTTSEngine:
         if gpt_sdec_path is None:
             gpt_sdec_int8_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec_int8.onnx")
             gpt_sdec_fp32_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec.onnx")
-            self.gpt_sdec_path = gpt_sdec_int8_path if os.path.exists(gpt_sdec_int8_path) else gpt_sdec_fp32_path
+            if is_quantization_enabled():
+                if os.path.exists(gpt_sdec_int8_path):
+                    self.gpt_sdec_path = gpt_sdec_int8_path
+                    print("⚙️ [양자화 ON] INT8 sdec 모델을 사용합니다: zundamon_t2s_sdec_int8.onnx")
+                else:
+                    self.gpt_sdec_path = gpt_sdec_fp32_path
+                    print("⚠️ [양자화 ON 요청] INT8 모델 파일이 없어 FP32 sdec 모델로 폴백합니다.")
+            else:
+                self.gpt_sdec_path = gpt_sdec_fp32_path
+                print("⚙️ [양자화 OFF] FP32 sdec 모델을 사용합니다: zundamon_t2s_sdec.onnx")
         else:
             self.gpt_sdec_path = gpt_sdec_path
 

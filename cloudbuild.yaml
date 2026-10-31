@@ -1,0 +1,160 @@
+steps:
+  # 1. 커밋 확인 및 빌드 시작 시간 기록
+  - id: 'Check-Commit-Message'
+    name: 'gcr.io/cloud-builders/git'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # 빌드 시작 시간을 초 단위로 저장
+        date +%s > /workspace/start_time
+        
+        COMMIT_TITLE=$(git log -1 --pretty=%B | head -n 1)
+        # 커밋 메시지를 다른 스텝에서 쓸 수 있게 저장
+        echo "$$COMMIT_TITLE" > /workspace/commit_msg
+        
+        shopt -s nocasematch
+        if [[ "$$COMMIT_TITLE" =~ ^PRODUCTION ]]; then
+          echo "YES" > /workspace/is_prod
+          echo "✅ PRODUCTION 커밋 확인됨. 상시 빌드 파이프라인을 시작합니다."
+        else
+          echo "NO" > /workspace/is_prod
+          echo "⏭️ PRODUCTION 커밋이 아닙니다. 배포를 건너뜁니다."
+        fi
+
+  # 2. Secret 로드 및 공통 웹훅 스크립트(webhook.sh) 생성
+  - id: 'Load_ENV_And_Prepare_Webhook'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$(cat /workspace/is_prod)" == "NO" ]; then exit 0; fi
+
+        # 스텝들에서 공통으로 사용할 웹훅 발송 함수 생성
+        cat << 'INNER_EOF' > /workspace/webhook.sh
+        send_webhook() {
+          local title="$$1"
+          local desc="$$2"
+          local color="$$3"
+          local fields="$$4"
+          
+          if [ -z "$$fields" ]; then fields="[]"; fi
+          
+          curl -o /dev/null -s -w " (HTTP %{http_code})\n" -X POST \
+            -H "Content-Type: application/json" \
+            -A "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://cloud.google.com)" \
+            -d "{\"embeds\": [{\"title\": \"$$title\", \"description\": \"$$desc\", \"color\": $$color, \"fields\": $$fields}]}" \
+            "$_WEBHOOK_URL"
+        }
+        INNER_EOF
+
+  # 3. Docker 이미지 빌드 (실패 시 에러 알림 포함)
+  - id: 'Docker-Build'
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$(cat /workspace/is_prod)" == "NO" ]; then exit 0; fi
+        
+        source /workspace/.env
+        source /workspace/webhook.sh
+        
+        # 에러 발생 시(trap) 어떤 명령어가 실패했는지(BASH_COMMAND) 캡처하여 웹훅 전송
+        trap 'CMD_ESCAPED=$${BASH_COMMAND//\"/\\\"}; send_webhook "❌ [Step 3] 도커 빌드 실패" "이미지 빌드 중 오류가 발생했습니다." 15158332 "[{\"name\":\"⚠️ 실패한 명령어\",\"value\":\"\`\`\`bash\n$$CMD_ESCAPED\n\`\`\`\"}]"' ERR
+        set -e
+
+        IMAGE_PATH="$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/$_INSTANCE_NAME:$COMMIT_SHA"
+        
+        echo "🐳 도커 이미지 빌드 중..."
+        docker build -t $$IMAGE_PATH .
+
+  # 4. 빌드된 컨테이너 TTS 음성 합성 테스트
+  - id: 'Test-TTS-Inference'
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$(cat /workspace/is_prod)" == "NO" ]; then exit 0; fi
+        
+        source /workspace/.env
+        source /workspace/webhook.sh
+        
+        trap 'CMD_ESCAPED=$${BASH_COMMAND//\"/\\\"}; send_webhook "❌ [Step 4] TTS 검증 실패" "빌드된 컨테이너의 음성 합성 테스트 중 오류가 발생했습니다." 15158332 "[{\"name\":\"⚠️ 실패한 명령어\",\"value\":\"\`\`\`bash\n$$CMD_ESCAPED\n\`\`\`\"}]"' ERR
+        set -e
+
+        IMAGE_PATH="$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/$_INSTANCE_NAME:$COMMIT_SHA"
+        
+        echo "🧪 [Run TTS Inference Test] 빌드된 컨테이너에서 infer_tts_minimal.py 음성 합성 검증 중..."
+        # Dockerfile에 gRPC 서버 실행 등의 ENTRYPOINT가 설정되어 있을 수 있으므로,
+        # --entrypoint를 python으로 강제 지정하여 테스트 스크립트만 실행하고 컨테이너를 종료시킵니다.
+        docker run --rm --entrypoint python $$IMAGE_PATH infer_tts_minimal.py
+
+  # 5. Docker 이미지 Artifact Registry 푸시 (실패 시 에러 알림 포함)
+  - id: 'Docker-Push'
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$(cat /workspace/is_prod)" == "NO" ]; then exit 0; fi
+        
+        source /workspace/.env
+        source /workspace/webhook.sh
+        
+        trap 'CMD_ESCAPED=$${BASH_COMMAND//\"/\\\"}; send_webhook "❌ [Step 5] 도커 푸시 실패" "Artifact Registry로 이미지 푸시 중 오류가 발생했습니다." 15158332 "[{\"name\":\"⚠️ 실패한 명령어\",\"value\":\"\`\`\`bash\n$$CMD_ESCAPED\n\`\`\`\"}]"' ERR
+        set -e
+
+        IMAGE_PATH="$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/$_INSTANCE_NAME:$COMMIT_SHA"
+        
+        echo "☁️ Artifact Registry로 푸시 중..."
+        docker push $$IMAGE_PATH
+
+  # 6. Cloud Run 서비스 배포 (실패 시 에러 알림 포함)
+  - id: 'deploy-to-existing-instance'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$(cat /workspace/is_prod)" == "NO" ]; then exit 0; fi
+        
+        source /workspace/.env
+        source /workspace/webhook.sh
+        
+        trap 'CMD_ESCAPED=$${BASH_COMMAND//\"/\\\"}; send_webhook "❌ [Step 6] Cloud Run 배포 실패" "Cloud Run 서비스 배포 중 오류가 발생했습니다." 15158332 "[{\"name\":\"⚠️ 실패한 명령어\",\"value\":\"\`\`\`bash\n$$CMD_ESCAPED\n\`\`\`\"}]"' ERR
+        set -e
+
+        IMAGE_PATH="$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/$_INSTANCE_NAME:$COMMIT_SHA"
+
+        echo "🚀 Cloud Run 서비스($_INSTANCE_NAME)에 배포 중..."
+        gcloud run deploy "$_INSTANCE_NAME" \
+          --image "$$IMAGE_PATH" \
+          --region "$_REGION"
+
+        # ======== [ 소요 시간 계산 ] ========
+        END_TIME=$(date +%s)
+        START_TIME=$(cat /workspace/start_time)
+        DURATION=$$((END_TIME - START_TIME))
+        MINS=$$((DURATION / 60))
+        SECS=$$((DURATION % 60))
+        TIME_STR="$${MINS}분 $${SECS}초"
+        
+        COMMIT_MSG=$(cat /workspace/commit_msg)
+        
+        # 성공 알림 웹훅 필드 구성
+        SUCCESS_FIELDS="[ \
+          {\"name\":\"📝 커밋 메시지\",\"value\":\"$$COMMIT_MSG\"}, \
+          {\"name\":\"⏱️ 배포 소요 시간\",\"value\":\"$$TIME_STR\",\"inline\":true} \
+        ]"
+        
+        # 성공 웹훅 전송
+        echo "✅ 배포 완료! 성공 알림을 전송합니다."
+        send_webhook "🚀 서비스 배포 성공" "Cloud Run 서비스($_INSTANCE_NAME)에 최신 이미지가 성공적으로 반영되었습니다." 3066993 "$$SUCCESS_FIELDS"
+
+substitutions:
+  _REPO_NAME: 'discord-bot-repo'
+options:
+  logging: CLOUD_LOGGING_ONLY
