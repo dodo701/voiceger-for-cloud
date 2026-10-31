@@ -66,4 +66,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # 기본 실행 명령어 (API 서버 엔드포인트 추가 시 변경 가능)
-CMD ["python", "infer_tts_minimal.py"]
+CMD ["python", "grpcservice.py"]

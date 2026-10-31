@@ -24,10 +24,19 @@ message TextChunkRequest {
   bool is_end_of_stream = 6;   // 클라이언트 텍스트 스트림의 마지막 문장 여부
 }
 
-message AudioChunkResponse {
-  string session_id = 1;       // 대화 세션 ID
-  bytes pcm_data = 2;          // 32000Hz 16-bit Mono PCM 바이너리
-  int32 sample_rate = 3;       // 32000
-  bool is_final = 4;           // 문장 또는 스트림 종료 여부
+message PipelineLatency {
+  float text_frontend_ms = 1;  // 텍스트 전처리(G2P) 소요 시간 (밀리초)
+  float gpt_latent_ms = 2;      // GPT T2S 토큰 생성 소요 시간 (밀리초)
+  float vits_decode_ms = 3;     // VITS 음향 파형 디코딩 소요 시간 (밀리초)
+  float total_elapsed_ms = 4;   // 파이프라인 전체 소요 시간 (밀리초)
+  float audio_duration_sec = 5; // 생성된 오디오 재생 시간 (초)
+  float rtf = 6;                // Real-Time Factor (1.0 미만이면 실시간보다 빠름)
 }
 
+message AudioChunkResponse {
+  string session_id = 1;        // 대화 세션 ID
+  bytes pcm_data = 2;           // 32000Hz 16-bit Mono PCM 바이너리
+  int32 sample_rate = 3;        // 32000
+  bool is_final = 4;            // 문장 또는 스트림 종료 여부
+  PipelineLatency latency = 5;  // 청크별 세부 파이프라인 소요 시간 (디버깅/모니터링용)
+}

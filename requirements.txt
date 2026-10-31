@@ -38,3 +38,8 @@ fastapi==0.162.0
 grpcio==1.85.1
 grpcio-health-checking==1.85.1
 protobuf==7.36.2
+
+# --- Logging & Monitoring ---
+google-cloud-logging==3.17.0
+google-cloud-error-reporting==1.17.0
+

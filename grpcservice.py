@@ -3,7 +3,6 @@ import sys
 import time
 import queue
 import threading
-import logging
 from concurrent import futures
 import grpc
 
@@ -19,9 +18,10 @@ sys.path.insert(0, now_dir)
 import tts_pb2
 import tts_pb2_grpc
 from infer_tts_minimal import ZundamonTTSEngine
+from cloud_logger import setup_cloud_logging, log_latency
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("TTS_gRPC_Service")
+# Google Cloud Logging 및 콘솔 로깅 초기화
+logger = setup_cloud_logging("voiceger-grpc-service")
 
 # 전역 엔진 싱글톤 (서버 시작 시 1회 로드)
 tts_engine: ZundamonTTSEngine = None
@@ -37,7 +37,7 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
         """
         양방향 스트리밍 핸들러 (Bidirectional Streaming):
         1. 클라이언트(Gemini Live 연결 서버)가 텍스트 청크를 쏟아내면 즉시 스레드 안전 큐(Queue)에 버퍼링합니다.
-        2. TTS 합성 워커가 큐에서 문장을 순서대로 꺼내어 합성 후 오디오 PCM 바이트를 실시간 반환합니다.
+        2. TTS 합성 워커가 큐에서 문장을 순서대로 꺼내어 합성 후 오디오 PCM 바이트와 파이프라인 소요 시간 메트릭을 실시간 반환합니다.
         """
         buffer_queue = queue.Queue()
         sentinel = object()
@@ -56,7 +56,7 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
                     if req.is_end_of_stream:
                         break
             except Exception as e:
-                logger.error(f"🚨 요청 수신 중 에러: {e}")
+                logger.error(f"🚨 요청 수신 중 에러: {e}", exc_info=True)
             finally:
                 buffer_queue.put(sentinel)
 
@@ -76,17 +76,17 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
             speed = item.speed if item.speed > 0 else 1.0
 
             logger.info(f"🧠 [합성 시작] '{text}' (lang={lang}, ref={ref_name})")
-            t0 = time.perf_counter()
 
             try:
-                pcm_bytes = self.engine.generate_sentence_pcm(
+                pcm_bytes, latency_dict = self.engine.generate_sentence_pcm_with_latency(
                     text,
                     lang=lang,
                     ref_name=ref_name,
                     speed=speed,
                 )
-                elapsed = time.perf_counter() - t0
-                logger.info(f"⚡ [합성 완료] '{text}' ({len(pcm_bytes)} bytes, {elapsed:.2f}초 소요)")
+                log_latency(logger, session_id, text, latency_dict)
+
+                latency_proto = tts_pb2.PipelineLatency(**latency_dict)
 
                 if len(pcm_bytes) > 0:
                     yield tts_pb2.AudioChunkResponse(
@@ -94,9 +94,10 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
                         pcm_data=pcm_bytes,
                         sample_rate=self.engine.sampling_rate,
                         is_final=False,
+                        latency=latency_proto,
                     )
             except Exception as e:
-                logger.error(f"🚨 문장 합성 실패 ('{text}'): {e}")
+                logger.error(f"🚨 문장 합성 실패 ('{text}'): {e}", exc_info=True)
 
         # 전체 스트림 완료 신호 전송
         yield tts_pb2.AudioChunkResponse(
@@ -117,16 +118,23 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
         if not text:
             return
 
-        pcm_bytes = self.engine.generate_sentence_pcm(text, lang=lang, ref_name=ref_name, speed=speed)
+        pcm_bytes, latency_dict = self.engine.generate_sentence_pcm_with_latency(
+            text, lang=lang, ref_name=ref_name, speed=speed
+        )
+        log_latency(logger, request.session_id, text, latency_dict)
+        latency_proto = tts_pb2.PipelineLatency(**latency_dict)
+
         chunk_size = 2048  # 1024 샘플 (16-bit Mono = 2바이트 * 1024)
 
         for i in range(0, len(pcm_bytes), chunk_size):
             chunk = pcm_bytes[i : i + chunk_size]
+            is_chunk_final = (i + chunk_size >= len(pcm_bytes))
             yield tts_pb2.AudioChunkResponse(
                 session_id=request.session_id,
                 pcm_data=chunk,
                 sample_rate=self.engine.sampling_rate,
-                is_final=(i + chunk_size >= len(pcm_bytes)),
+                is_final=is_chunk_final,
+                latency=latency_proto if is_chunk_final else None,
             )
 
     def SynthesizeSentence(self, request, context):
@@ -136,12 +144,18 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
         ref_name = request.ref_audio_name or "01_ref_emoNormal026.wav"
         speed = request.speed if request.speed > 0 else 1.0
 
-        pcm_bytes = self.engine.generate_sentence_pcm(text, lang=lang, ref_name=ref_name, speed=speed)
+        pcm_bytes, latency_dict = self.engine.generate_sentence_pcm_with_latency(
+            text, lang=lang, ref_name=ref_name, speed=speed
+        )
+        log_latency(logger, request.session_id, text, latency_dict)
+        latency_proto = tts_pb2.PipelineLatency(**latency_dict)
+
         return tts_pb2.AudioChunkResponse(
             session_id=request.session_id,
             pcm_data=pcm_bytes,
             sample_rate=self.engine.sampling_rate,
             is_final=True,
+            latency=latency_proto,
         )
 
 

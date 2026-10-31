@@ -54,7 +54,15 @@ def run_grpc_test():
             break
 
         chunk_count += 1
-        print(f"📥 [클라이언트 수신] 오디오 청크 {chunk_count}: {len(resp.pcm_data)} bytes (SR: {resp.sample_rate})")
+        lat = resp.latency
+        if lat and lat.total_elapsed_ms > 0:
+            print(
+                f"📥 [클라이언트 수신] 오디오 청크 {chunk_count}: {len(resp.pcm_data)} bytes | "
+                f"⏱️ G2P: {lat.text_frontend_ms:.1f}ms, GPT: {lat.gpt_latent_ms:.1f}ms, VITS: {lat.vits_decode_ms:.1f}ms | "
+                f"총합: {lat.total_elapsed_ms:.1f}ms (오디오길이: {lat.audio_duration_sec:.2f}s, RTF: {lat.rtf:.2f}x)"
+            )
+        else:
+            print(f"📥 [클라이언트 수신] 오디오 청크 {chunk_count}: {len(resp.pcm_data)} bytes (SR: {resp.sample_rate})")
         received_pcm_list.append(resp.pcm_data)
 
     if received_pcm_list:

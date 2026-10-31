@@ -1,12 +1,13 @@
 import os
 import sys
+import time
 import math
 import platform
 import soundfile as sf
 import onnxruntime as ort
 import numpy as np
 import cProfile
-from typing import Generator, List, Tuple
+from typing import Generator, List, Tuple, Dict
 from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -328,6 +329,92 @@ class ZundamonTTSEngine:
         self.prompt_semantic = np.asarray(entry["prompt_semantic"], dtype=np.int64)
         self.vits.ref_audio_sr = np.asarray(entry["ref_audio_sr"], dtype=np.float32)
 
+    def generate_sentence_with_latency(
+        self,
+        text: str,
+        lang: str = "ko",
+        ref_name: str = None,
+        top_k: int = 15,
+        speed: float = 1.0,
+    ) -> Tuple[np.ndarray, Dict[str, float]]:
+        """
+        단일 문장 청크를 합성하며 각 파이프라인 단계별 소요 시간(ms) 및 RTF를 측정하여 반환합니다.
+        Returns:
+            (audio, latency_dict)
+        """
+        t_start = time.perf_counter()
+
+        if ref_name and ref_name != self.current_ref_name:
+            self.set_ref_audio(ref_name)
+
+        clean_text = text.strip()
+        if not clean_text:
+            return np.zeros(0, dtype=np.float32), {
+                "text_frontend_ms": 0.0,
+                "gpt_latent_ms": 0.0,
+                "vits_decode_ms": 0.0,
+                "total_elapsed_ms": 0.0,
+                "audio_duration_sec": 0.0,
+                "rtf": 0.0,
+            }
+
+        # 1. 텍스트 G2P 음소 분석
+        t_g2p_start = time.perf_counter()
+        phones, bert_features, _ = self.text_preprocessor.segment_and_extract_feature_for_text(clean_text, lang, "v2")
+        t_g2p = time.perf_counter() - t_g2p_start
+
+        if not phones:
+            return np.zeros(0, dtype=np.float32), {
+                "text_frontend_ms": round(t_g2p * 1000, 2),
+                "gpt_latent_ms": 0.0,
+                "vits_decode_ms": 0.0,
+                "total_elapsed_ms": round((time.perf_counter() - t_start) * 1000, 2),
+                "audio_duration_sec": 0.0,
+                "rtf": 0.0,
+            }
+
+        # 2. 레퍼런스 프롬프트 텐서와 결합
+        all_phones = np.asarray(self.ref_cache["phones"] + phones, dtype=np.int64)
+        all_bert = np.concatenate([self.ref_cache["bert_features"], bert_features], axis=1).astype(np.float32, copy=False)
+
+        # 3. GPT T2S 운율/억양 토큰 생성
+        t_gpt_start = time.perf_counter()
+        pred_tokens, idx = self.t2s.infer(
+            all_phones,
+            self.prompt_semantic,
+            all_bert,
+            top_k=top_k,
+            early_stop_num=self.hz * self.max_sec,
+        )
+        t_gpt = time.perf_counter() - t_gpt_start
+
+        # 4. VITS 오디오 파형 디코딩
+        t_vits_start = time.perf_counter()
+        pred_semantic = pred_tokens[-idx:][None, None, :]
+        text_seq = np.asarray(phones, dtype=np.int64)[None, :]
+        audio = self.vits.decode(pred_semantic, text_seq, speed=speed)
+        t_vits = time.perf_counter() - t_vits_start
+
+        # 5. 피크 방지 정규화
+        max_val = np.abs(audio).max()
+        if max_val > 1.0:
+            audio = audio / max_val
+
+        t_total = time.perf_counter() - t_start
+        audio_duration_sec = len(audio) / self.sampling_rate
+        rtf = (t_total / audio_duration_sec) if audio_duration_sec > 0 else 0.0
+
+        latency = {
+            "text_frontend_ms": round(t_g2p * 1000, 2),
+            "gpt_latent_ms": round(t_gpt * 1000, 2),
+            "vits_decode_ms": round(t_vits * 1000, 2),
+            "total_elapsed_ms": round(t_total * 1000, 2),
+            "audio_duration_sec": round(audio_duration_sec, 3),
+            "rtf": round(rtf, 3),
+        }
+
+        return audio, latency
+
     def generate_sentence(
         self,
         text: str,
@@ -337,48 +424,21 @@ class ZundamonTTSEngine:
         speed: float = 1.0,
     ) -> np.ndarray:
         """단일 문장 청크를 입력받아 float32 오디오 배열(shape: (N,))을 즉시 합성합니다."""
-        if ref_name and ref_name != self.current_ref_name:
-            self.set_ref_audio(ref_name)
-
-        clean_text = text.strip()
-        if not clean_text:
-            return np.zeros(0, dtype=np.float32)
-
-        # 1. 텍스트 G2P 음소 분석
-        phones, bert_features, _ = self.text_preprocessor.segment_and_extract_feature_for_text(clean_text, lang, "v2")
-        if not phones:
-            return np.zeros(0, dtype=np.float32)
-
-        # 2. 레퍼런스 프롬프트 텐서와 결합
-        all_phones = np.asarray(self.ref_cache["phones"] + phones, dtype=np.int64)
-        all_bert = np.concatenate([self.ref_cache["bert_features"], bert_features], axis=1).astype(np.float32, copy=False)
-
-        # 3. GPT T2S 운율/억양 토큰 생성
-        pred_tokens, idx = self.t2s.infer(
-            all_phones,
-            self.prompt_semantic,
-            all_bert,
-            top_k=top_k,
-            early_stop_num=self.hz * self.max_sec,
+        audio, _ = self.generate_sentence_with_latency(
+            text=text, lang=lang, ref_name=ref_name, top_k=top_k, speed=speed
         )
-
-        # 4. VITS 오디오 파형 디코딩
-        pred_semantic = pred_tokens[-idx:][None, None, :]
-        text_seq = np.asarray(phones, dtype=np.int64)[None, :]
-        audio = self.vits.decode(pred_semantic, text_seq, speed=speed)
-
-        # 5. 피크 방지 정규화
-        max_val = np.abs(audio).max()
-        if max_val > 1.0:
-            audio = audio / max_val
-
         return audio
+
+    def generate_sentence_pcm_with_latency(self, text: str, **kwargs) -> Tuple[bytes, Dict[str, float]]:
+        """단일 문장을 입력받아 32kHz 16-bit Mono PCM 바이트 스트림 및 지연시간 메트릭 반환 (gRPC 직결용)"""
+        audio, latency = self.generate_sentence_with_latency(text, **kwargs)
+        pcm = (audio * 32767).astype(np.int16)
+        return pcm.tobytes(), latency
 
     def generate_sentence_pcm(self, text: str, **kwargs) -> bytes:
         """단일 문장을 입력받아 32kHz 16-bit Mono PCM 바이트 스트림 반환 (gRPC 직결용)"""
-        audio = self.generate_sentence(text, **kwargs)
-        pcm = (audio * 32767).astype(np.int16)
-        return pcm.tobytes()
+        pcm, _ = self.generate_sentence_pcm_with_latency(text, **kwargs)
+        return pcm
 
     def generate_stream(
         self,
