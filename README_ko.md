@@ -7,19 +7,20 @@
 
 ## 그래서 이걸 왜 만드셨습니까...
 
-1. voiceger v2 원본 프로그램은 GPU가 있어야 사실상 실시간 렌더링이 가능함. 나같은 cpu밖에 없는 거지들은 못 돌림!!
-2. 원본 레포지토리는 2025년부터 업데이트가 멎음. 대부분의 디펜던시와 모델 로드 작업을 극단적으로 최적화할 거임.
-3. 이 레포 전체를 도커로 패키징해서, 서버 배포를 쉽게 할 거임!!!
+1. voiceger v2 원본 프로그램은 GPU가 있어야 사실상 실시간 렌더링이 가능해요. cpu밖에 없는 대다수의 서버 환경에서는 구동이 불가능해요.
+2. 원본 레포지토리는 2025년부터 업데이트가 멎었어요. 대부분의 디펜던시와 모델 로드 작업을 극단적으로 최적화하는 것이 목표예요!
+3. 이 레포 전체를 도커로 패키징해서, 서버 배포를 쉽게 할 거예요!
+4. cloudbuild.yaml을 통해 GCP로 바로 배포할 수 있어요!
 
 ## 프로젝트 개요
 
-이 레포는 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 을 기반으로 한국어, 영어, 일본어의 즌다몬 음성 합성을 진행하기 위해 만들어짐.
+이 레포는 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 을 기반으로 한국어, 영어, 일본어의 즌다몬 음성 합성을 진행하기 위해 만들어졌어요.
 
 ## 기능들!
 
-1. 기본 cli 기반 음성 합성 툴 존재.(infer_tts_minimal.py)
-2. Emotion/style presets for TTS: select a Zundamon emotion, enter text, and generate audio; multilingual input is supported.
-3. 
+1. gRPC를 통한 음성 합성(InferTTS) 제공
+2. TTS 감정 및 스타일 프리셋(감정/스타일 선택, 텍스트 입력 후 오디오 생성) 제공
+3. 로컬 음성 합성은, 다른 레포를 참고해 주세요! 이 레포는 서버환경을 위해 최적화되어 있어요!
 
 ## Prerequisites
 
@@ -32,7 +33,7 @@ pip install -r requirements_final.txt
 - If you don't use any GPU for inference, install torch with extra index.
   
 
-After installing the dependencies, install PyTorch and its companion packages.`torchaudio` are required.
+파이토치는 필요 없어요!
 
 The following versions are tested and verified to work successfully:
 
@@ -42,7 +43,7 @@ The following versions are tested and verified to work successfully:
 - **인텔 오픈비노 오닉스 런타입**: `1.24.1`
 - **허깅패이스 트랜스포머**
 
-## Setup Instructions
+## 로컬 설치를 위한 가이드
 
 ### Step 1: Clone the Repository
 
@@ -59,7 +60,7 @@ cd voiceger_v2
     - Use the following commands to download and set up the models:
         
         ```bash
-        (enable venv in python.)
+        가상환경 화
         python download.py
         ```
     
