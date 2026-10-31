@@ -1,28 +1,60 @@
-# 가상환경 및 Git 메타데이터 제외
+# ==============================================================================
+# 가상환경 및 개발/Git 메타데이터 제외
+# ==============================================================================
 venv/
 .venv/
 .git/
 .gitignore
+.github/
 .vscode/
 .idea/
 
-# Python 바이트코드 캐시 및 프로파일링 덤프 제외
+# ==============================================================================
+# Python 바이트코드 캐시 및 프로파일링/디버그 덤프 제외
+# ==============================================================================
 **/__pycache__/
 *.py[cod]
 *$py.class
 *.prof
+*.pstats
+cache/
 
-# 로컬에서 생성된 테스트 결과 오디오 제외 (reference_audios/는 유지)
+# ==============================================================================
+# 생성된 테스트 결과 오디오 제외 (reference_audios/ 원본 및 ref_cache.npz는 유지)
+# ==============================================================================
 /*.wav
+/*.mp3
+/*.flac
 
+# ==============================================================================
+# 오프라인 개발/변환 도구 및 디버그 스크립트 제외 (컨테이너 경량화)
+# ==============================================================================
+preload.py
+onnx_export.py
+onnx_quntization.py
+debug.py
+requirements-dev.txt
+tools/
+
+# ==============================================================================
 # 모델 가중치는 Docker 빌드 중 download.py를 통해 다운로드하므로 로컬 파일 복사 제외
+# ==============================================================================
 GPT_weights_v2/*.onnx
 GPT_weights_v2/*.ckpt
 GPT_weights_v2/*.safetensors
 SoVITS_weights_v2/*.onnx
 SoVITS_weights_v2/*.pth
-GPT_SoVITS/pretrained_models/**/*.safetensors
-GPT_SoVITS/pretrained_models/**/*.bin
-GPT_SoVITS/pretrained_models/**/*.pth
-GPT_SoVITS/pretrained_models/**/*.ckpt
+
+# ==============================================================================
+# 런타임에서 사용되지 않는 레거시/오프라인 전용 폴더 및 대용량 HuBERT 제외 (~1.6GB)
+# ==============================================================================
+GPT_SoVITS/pretrained_models/
+GPT_SoVITS/feature_extractor/
+GPT_SoVITS/AR/
+GPT_SoVITS/module/
+GPT_SoVITS/configs/
+GPT_SoVITS/utils.py
+GPT_SoVITS/TTS_infer_pack/TTS.py
+GPT_SoVITS/TTS_infer_pack/text_segmentation_method.py
+
 

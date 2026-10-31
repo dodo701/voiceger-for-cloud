@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package tts;
+
+service TTSService {
+  // 양방향 스트리밍 (Bidirectional Streaming):
+  // 클라이언트가 텍스트 문장 청크를 계속 쏘아 올리고,
+  // 서버는 버퍼 큐에 담아 순차 합성하면서 실시간으로 오디오 청크를 스트리밍 반환
+  rpc StreamChatTTS (stream TextChunkRequest) returns (stream AudioChunkResponse);
+
+  // 단일 문장 요청 -> 오디오 스트리밍 반환 (Server Streaming)
+  rpc SynthesizeSentenceStream (TextChunkRequest) returns (stream AudioChunkResponse);
+
+  // 단일 문장 요청 -> 완성된 전체 오디오 일괄 반환 (Unary)
+  rpc SynthesizeSentence (TextChunkRequest) returns (AudioChunkResponse);
+}
+
+message TextChunkRequest {
+  string session_id = 1;       // 대화 세션 ID (여러 세션 분기용)
+  string text = 2;             // 전처리된 단일 문장 텍스트
+  string text_lang = 3;        // 언어 ("ko", "ja", "en", 기본: "ko")
+  string ref_audio_name = 4;   // 감정 레퍼런스 음원 ("01_ref_emoNormal026.wav" 등)
+  float speed = 5;             // 배속 (기본: 1.0)
+  bool is_end_of_stream = 6;   // 클라이언트 텍스트 스트림의 마지막 문장 여부
+}
+
+message AudioChunkResponse {
+  string session_id = 1;       // 대화 세션 ID
+  bytes pcm_data = 2;          // 32000Hz 16-bit Mono PCM 바이너리
+  int32 sample_rate = 3;       // 32000
+  bool is_final = 4;           // 문장 또는 스트림 종료 여부
+}
+

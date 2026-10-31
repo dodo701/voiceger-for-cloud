@@ -1,0 +1,22 @@
+# ==============================================================================
+# Dev / offline-only dependencies (NOT included in the runtime image)
+#   - preload.py (reference cache), onnx_export.py, onnx_quntization.py, benchmarks
+# Install: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-dev.txt
+# NOTE: keep this file ASCII-only.
+# ==============================================================================
+-r requirements.txt
+
+torch==2.11.0+cpu
+torchaudio==2.11.0+cpu
+transformers==5.22.0
+tokenizers==0.23.3
+safetensors==0.8.0
+librosa==0.11.0
+pytorch-lightning==2.6.6        # needed when onnx_export.py loads the AR model code
+einops==0.8.2
+scipy==1.17.1
+onnx==1.23.2
+
+# Benchmark / profiling
+psutil
+snakeviz==2.2.2

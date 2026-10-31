@@ -1,1 +1,1 @@
-from . import TTS, text_segmentation_method
+from .TextPreprocessor import TextPreprocessor
