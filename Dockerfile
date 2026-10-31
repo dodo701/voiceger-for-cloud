@@ -56,7 +56,7 @@ dict_dir = pyopenjtalk.OPEN_JTALK_DICT_DIR; \
 dict_dir = dict_dir.decode('utf-8') if isinstance(dict_dir, bytes) else dict_dir; \
 mecab_dir = os.path.dirname(dict_dir); \
 target = os.path.join(mecab_dir, 'user.dict'); \
-src = '/app/GPT_SoVITS/text/ja_userdic/user.dict'; \
+src = '/app/text/ja_userdic/user.dict'; \
 (os.remove(target) if os.path.exists(target) or os.path.islink(target) else None); \
 os.symlink(src, target) if os.path.exists(src) else None" && \
     python -c "import site, os; p = os.path.join(site.getsitepackages()[0], 'LangSegment', '__init__.py'); open(p, 'w').write(open(p).read().replace('setLangfilters,getLangfilters,', ''))"

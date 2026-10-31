@@ -46,15 +46,8 @@ SoVITS_weights_v2/*.onnx
 SoVITS_weights_v2/*.pth
 
 # ==============================================================================
-# 런타임에서 사용되지 않는 레거시/오프라인 전용 폴더 및 대용량 HuBERT 제외 (~1.6GB)
+# 런타임에서 사용되지 않는 레거시/오프라인 전용 GPT_SoVITS 폴더 전체 제외 (~1.6GB)
 # ==============================================================================
-GPT_SoVITS/pretrained_models/
-GPT_SoVITS/feature_extractor/
-GPT_SoVITS/AR/
-GPT_SoVITS/module/
-GPT_SoVITS/configs/
-GPT_SoVITS/utils.py
-GPT_SoVITS/TTS_infer_pack/TTS.py
-GPT_SoVITS/TTS_infer_pack/text_segmentation_method.py
+GPT_SoVITS/
 
 

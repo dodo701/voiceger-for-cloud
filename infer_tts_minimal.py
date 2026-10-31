@@ -14,10 +14,10 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-# 프로젝트 루트 및 GPT-SoVITS 모듈 경로 등록
+# 프로젝트 루트 모듈 경로 등록
 now_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, now_dir)
-sys.path.insert(0, os.path.join(now_dir, "GPT_SoVITS"))
+if now_dir not in sys.path:
+    sys.path.insert(0, now_dir)
 
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
 

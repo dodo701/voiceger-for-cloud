@@ -193,8 +193,8 @@ def _init_japanese_userdict():
         return
     try:
         cur_dir = os.path.dirname(os.path.abspath(__file__))
-        gpt_sovits_dir = os.path.dirname(cur_dir)
-        userdic_bin = os.path.join(gpt_sovits_dir, "text", "ja_userdic", "user.dict")
+        root_dir = os.path.dirname(cur_dir)
+        userdic_bin = os.path.join(root_dir, "text", "ja_userdic", "user.dict")
         if os.path.exists(userdic_bin):
             pyopenjtalk.update_global_jtalk_with_user_dict(userdic_bin)
     except Exception:
