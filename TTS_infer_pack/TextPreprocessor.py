@@ -1,5 +1,4 @@
 import os
-import sys
 import re
 from typing import Dict, List, Tuple, Callable
 from tqdm import tqdm
@@ -293,7 +292,6 @@ def japanese_g2p(norm_text, with_prosody=True):
 # Korean G2P (g2pk2 + jamo + ko_pron)
 # ==============================================================================
 from jamo import h2j, j2hcj
-import ko_pron
 from g2pk2 import G2p
 
 _g2p_ko = G2p()

@@ -1,5 +1,5 @@
 # ==============================================================================
-# 아직 onnx inferencee 파이프라인이 미완성 상태임.
+# Voiceger Hybrid TTS Server (PyTorch CPU Safetensors T2S + ONNX VITS)
 # ==============================================================================
 FROM python:3.11-slim-bookworm
 
@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. 의존성 파일 복사 및 설치 (런타임 전용, torch 미포함)
+# 2. 의존성 파일 복사 및 설치 (런타임 전용)
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
         && pip install -r requirements.txt

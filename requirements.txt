@@ -1,13 +1,16 @@
 # ==============================================================================
-# Runtime-only dependencies (inference server / Docker / Cloud Run). No torch.
-#   Run: python infer_tts_minimal.py
-# For preload.py (reference cache), ONNX export/quantization, benchmarks,
-# see requirements-dev.txt.
+# Runtime dependencies (inference server / Docker / Cloud Run).
+# Hybrid architecture: PyTorch (CPU) for T2S, ONNX for VITS.
+# Run: python infer_tts_minimal.py
 # Only direct dependencies are pinned; pip resolves the transitive ones.
 # NOTE: keep this file ASCII-only (pip on Windows decodes it with the locale codec).
 # ==============================================================================
 
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # --- Inference engine ---
+torch
+safetensors==0.8.0
 numpy==2.2.6
 onnxruntime-openvino==1.24.1
 openvino==2025.4.1  
@@ -42,4 +45,3 @@ protobuf==7.36.2
 # --- Logging & Monitoring ---
 google-cloud-logging==3.17.0
 google-cloud-error-reporting==1.17.0
-

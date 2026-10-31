@@ -45,8 +45,9 @@ SoVITS_weights_v2/*.onnx
 SoVITS_weights_v2/*.pth
 
 # ==============================================================================
-# 런타임에서 사용되지 않는 레거시/오프라인 전용 GPT_SoVITS 폴더 전체 제외 (~1.6GB)
+# 오프라인 전용 사전학습 가중치 및 feature_extractor 폴더 제외 (AR 모듈은 포함)
 # ==============================================================================
-GPT_SoVITS/
+GPT_SoVITS/pretrained_models/
+GPT_SoVITS/feature_extractor/
 
 

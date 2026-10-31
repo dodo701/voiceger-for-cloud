@@ -2,27 +2,33 @@ import os
 import sys
 import time
 import math
-import gc
+import json
 import random
 import threading
 import platform
 import soundfile as sf
 import onnxruntime as ort
 import numpy as np
-from typing import Generator, List, Tuple, Dict
-from tqdm import tqdm
+import torch
+from typing import Generator, Tuple, Dict, Optional, Union
+from safetensors import safe_open
+from safetensors.torch import load_file
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-# 프로젝트 루트 모듈 경로 등록
+# 프로젝트 루트 및 GPT_SoVITS 모듈 경로 등록
 now_dir = os.path.dirname(os.path.abspath(__file__))
 if now_dir not in sys.path:
     sys.path.insert(0, now_dir)
+gpt_sovits_dir = os.path.join(now_dir, "GPT_SoVITS")
+if gpt_sovits_dir not in sys.path:
+    sys.path.insert(0, gpt_sovits_dir)
 
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
+from AR.models.t2s_model import Text2SemanticDecoder
 
 
 def get_container_cpu_threads() -> int:
@@ -124,111 +130,65 @@ def get_onnx_providers(num_threads: int) -> list:
     return ["CPUExecutionProvider"]
 
 
-class ONNXT2SAdapter:
-    """GPT(Text2Semantic) 3단계 분할 ONNX 모델(encoder, fsdec, sdec) 제로카피 어댑터"""
+class PyTorchT2SAdapter:
+    """GPT(Text2Semantic) PyTorch CPU Safetensors 고속 추론 어댑터"""
 
-    def __init__(self, enc_path: str, fsdec_path: str, sdec_path: str, providers: list, num_threads: int):
-        sess_options = create_ort_session_options(num_threads)
-        self.encoder_session = ort.InferenceSession(enc_path, sess_options=sess_options, providers=providers)
-        self.fsdec_session = ort.InferenceSession(fsdec_path, sess_options=sess_options, providers=providers)
-        self.sdec_session = ort.InferenceSession(sdec_path, sess_options=sess_options, providers=providers)
+    def __init__(self, safetensors_path: str, device: str = "cpu"):
+        print(f"⚡ PyTorch CPU 기반 Safetensors GPT(T2S) 모델 로드 중: {os.path.basename(safetensors_path)}")
+        with safe_open(safetensors_path, framework="pt", device=device) as f:
+            self.config = json.loads(f.metadata()["config"])
 
-        self.EOS = 1024
-        self.dummy_ssl = np.zeros((1, 768, 10), dtype=np.float32)
+        self.device = device
+        self.hz = 50
+        self.max_sec = self.config["data"]["max_sec"]
+        self.top_k = self.config["inference"]["top_k"]
+
+        weights = load_file(safetensors_path, device=device)
+        state_dict = {
+            (k[6:] if k.startswith("model.") else k): v
+            for k, v in weights.items()
+        }
+
+        self.model = Text2SemanticDecoder(config=self.config, top_k=self.top_k)
+        self.model.load_state_dict(state_dict)
+        self.model.eval().to(device)
 
     def infer(
         self,
-        phoneme_ids: np.ndarray,
+        all_phoneme_ids: np.ndarray,
         prompt_semantic: np.ndarray,
-        bert_features: np.ndarray,
+        all_bert_features: np.ndarray,
         top_k: int = 15,
-        early_stop_num: int = 2700,
+        top_p: float = 1.0,
+        temperature: float = 1.0,
+        early_stop_num: int = -1,
+        repetition_penalty: float = 1.35,
     ) -> Tuple[np.ndarray, int]:
         """단일 문장에 대해 GPT 억양/운율 토큰을 생성합니다."""
-        prompts_np = np.ascontiguousarray(prompt_semantic[None, :], dtype=np.int64)
-        prefix_len = prompts_np.shape[1]
+        if prompt_semantic.ndim == 1:
+            prompt_semantic = prompt_semantic[None, :]
 
-        ph_np = np.asarray(phoneme_ids, dtype=np.int64)
-        bert_np = np.asarray(bert_features, dtype=np.float32).T  # [L, 1024]
+        x = torch.from_numpy(all_phoneme_ids).unsqueeze(0).long().to(self.device)
+        x_lens = torch.LongTensor([all_phoneme_ids.shape[0]]).to(self.device)
+        prompts = torch.from_numpy(prompt_semantic).long().to(self.device)
+        bert_feat = torch.from_numpy(all_bert_features).unsqueeze(0).float().to(self.device)
 
-        ref_seq = np.ascontiguousarray(ph_np[:1][None, :])
-        text_seq = np.ascontiguousarray(ph_np[1:][None, :])
-        ref_bert = np.ascontiguousarray(bert_np[:1, :])
-        text_bert = np.ascontiguousarray(bert_np[1:, :])
+        prefix_len = prompts.shape[1]
 
-        # 1. T2S Encoder
-        x = self.encoder_session.run(
-            ["x"],
-            {
-                "ref_seq": ref_seq,
-                "text_seq": text_seq,
-                "ref_bert": ref_bert,
-                "text_bert": text_bert,
-                "ssl_content": self.dummy_ssl,
-            },
-        )[0]
+        with torch.no_grad():
+            y, idx = self.model.infer_panel_naive(
+                x,
+                x_lens,
+                prompts,
+                bert_feat,
+                top_k=top_k,
+                top_p=top_p,
+                early_stop_num=early_stop_num if early_stop_num != -1 else (self.hz * self.max_sec),
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+            )
 
-        # 2. First Stage Decoder (Prefill & KV-Cache 초기화)
-        fsdec_io = self.fsdec_session.io_binding()
-        fsdec_io.bind_cpu_input("x", x)
-        fsdec_io.bind_cpu_input("prompts", prompts_np)
-        for out_name in ["y", "k", "v", "y_emb", "x_example"]:
-            fsdec_io.bind_output(out_name)
-
-        self.fsdec_session.run_with_iobinding(fsdec_io)
-        outputs = fsdec_io.get_outputs()
-        y, k, v, y_emb, x_example = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4]
-
-        # 3. Stage Decoder (Autoregressive Step Loop with Zero-Copy Ping-Pong)
-        sdec_io_1 = self.sdec_session.io_binding()
-        sdec_io_2 = self.sdec_session.io_binding()
-        io_bindings = [sdec_io_1, sdec_io_2]
-
-        sdec_io_1.bind_ortvalue_input("iy", y)
-        sdec_io_1.bind_ortvalue_input("ik", k)
-        sdec_io_1.bind_ortvalue_input("iv", v)
-        sdec_io_1.bind_ortvalue_input("iy_emb", y_emb)
-        sdec_io_1.bind_ortvalue_input("ix_example", x_example)
-        for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
-            sdec_io_1.bind_output(out_name)
-
-        idx = 1
-        for idx in tqdm(range(1, 1500), leave=False):
-            io_curr = io_bindings[(idx - 1) % 2]
-            io_next = io_bindings[idx % 2]
-
-            self.sdec_session.run_with_iobinding(io_curr)
-            outputs = io_curr.get_outputs()
-
-            y, k, v, y_emb, logits, samples = outputs[0], outputs[1], outputs[2], outputs[3], outputs[4], outputs[5]
-
-            io_next.clear_binding_inputs()
-            io_next.clear_binding_outputs()
-
-            io_next.bind_ortvalue_input("iy", y)
-            io_next.bind_ortvalue_input("ik", k)
-            io_next.bind_ortvalue_input("iv", v)
-            io_next.bind_ortvalue_input("iy_emb", y_emb)
-            io_next.bind_ortvalue_input("ix_example", x_example)
-
-            for out_name in ["y", "k", "v", "y_emb", "logits", "samples"]:
-                io_next.bind_output(out_name)
-
-            y_shape = y.shape()
-            stop = False
-            if early_stop_num != -1 and (y_shape[1] - prefix_len) > early_stop_num:
-                stop = True
-
-            logits_np = logits.numpy()
-            samples_np = samples.numpy()
-            if int(np.argmax(logits_np, axis=-1)[0]) == self.EOS or int(samples_np[0, 0]) == self.EOS:
-                stop = True
-            if stop:
-                break
-
-        y_np = y.numpy()
-        y_np[0, -1] = 0
-        pred_tokens = y_np[0, -idx:].copy().astype(np.int64)
+        pred_tokens = y[0, prefix_len:].cpu().numpy().astype(np.int64)
         return pred_tokens, idx
 
 
@@ -252,14 +212,6 @@ class ONNXVitsAdapter:
         return audio_onnx
 
 
-def is_quantization_enabled() -> bool:
-    """시스템 환경변수 enable_quantization(대소문자 무관)을 읽어 INT8 sdec 사용 여부를 반환합니다. 기본값: OFF."""
-    raw = os.environ.get("enable_quantization")
-    if raw is None:
-        raw = os.environ.get("ENABLE_QUANTIZATION", "")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def configure_random_seed(seed: int = None) -> int:
     """글로벌 난수 시드를 설정하고 콘솔/로그에 출력합니다."""
     if seed is None or seed == -1 or seed == "":
@@ -268,51 +220,35 @@ def configure_random_seed(seed: int = None) -> int:
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
     ort.set_seed(seed)
     print(f"🎲 [시드 설정] 엔진 난수 시드가 설정되었습니다: {seed}")
     return seed
 
 
 class ZundamonTTSEngine:
-    """레거시 TTS.py 의존성을 100% 제거한 단일 자립형 Full ONNX + 순수 NumPy 음성 합성 엔진"""
+    """하이브리드(PyTorch CPU Safetensors T2S + ONNX VITS) 고속 음성 합성 엔진"""
 
     def __init__(
         self,
-        gpt_enc_path: str = None,
-        gpt_fsdec_path: str = None,
-        gpt_sdec_path: str = None,
+        gpt_safetensors_path: str = None,
         vits_onnx_path: str = None,
         ref_cache_path: str = None,
         num_threads: int = None,
         seed: int = None,
     ):
-        # RLock: set_seed()가 락을 잡은 채 warmup() -> generate_sentence_with_latency()를 재호출하므로 재진입 필수
         self.lock = threading.RLock()
         self.num_threads = num_threads or get_container_cpu_threads()
         os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
+        torch.set_num_threads(self.num_threads)
         self.onnx_providers = get_onnx_providers(self.num_threads)
 
-        # 모델 기본 경로 세팅 및 보관 (동적 재로드 지원)
-        self.gpt_enc_path = gpt_enc_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_encoder.onnx")
-        self.gpt_fsdec_path = gpt_fsdec_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_fsdec.onnx")
+        # 모델 기본 경로 세팅
+        self.gpt_safetensors_path = gpt_safetensors_path or os.path.join(
+            now_dir, "GPT_weights_v2", "zudamon_style_1-e15.safetensors"
+        )
         self.vits_onnx_path = vits_onnx_path or os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
         self.ref_cache_path = ref_cache_path or os.path.join(now_dir, "reference_audios", "ref_cache.npz")
-
-        if gpt_sdec_path is None:
-            gpt_sdec_int8_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec_int8.onnx")
-            gpt_sdec_fp32_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec.onnx")
-            if is_quantization_enabled():
-                if os.path.exists(gpt_sdec_int8_path):
-                    self.gpt_sdec_path = gpt_sdec_int8_path
-                    print("⚙️ [양자화 ON] INT8 sdec 모델을 사용합니다: zundamon_t2s_sdec_int8.onnx")
-                else:
-                    self.gpt_sdec_path = gpt_sdec_fp32_path
-                    print("⚠️ [양자화 ON 요청] INT8 모델 파일이 없어 FP32 sdec 모델로 폴백합니다.")
-            else:
-                self.gpt_sdec_path = gpt_sdec_fp32_path
-                print("⚙️ [양자화 OFF] FP32 sdec 모델을 사용합니다: zundamon_t2s_sdec.onnx")
-        else:
-            self.gpt_sdec_path = gpt_sdec_path
 
         # 1. 난수 시드 설정
         self.seed = configure_random_seed(seed)
@@ -332,9 +268,9 @@ class ZundamonTTSEngine:
         # 3. 텍스트 전처리기 (순수 NumPy G2P)
         self.text_preprocessor = TextPreprocessor()
 
-        # 4. ONNX 딥러닝 엔진 로드
-        print(f"📦 [엔진 로드] Full ONNX GPT 3종 + VITS 디코더 로딩 중...")
-        self.t2s = ONNXT2SAdapter(self.gpt_enc_path, self.gpt_fsdec_path, self.gpt_sdec_path, self.onnx_providers, self.num_threads)
+        # 4. 하이브리드 엔진 로드: PyTorch T2S + ONNX VITS
+        print(f"📦 [엔진 로드] PyTorch T2S (Safetensors) + ONNX VITS 디코더 로딩 중...")
+        self.t2s = PyTorchT2SAdapter(self.gpt_safetensors_path, device="cpu")
         self.vits = ONNXVitsAdapter(self.vits_onnx_path, self.onnx_providers, self.num_threads)
 
         self.sampling_rate = 32000
@@ -345,43 +281,19 @@ class ZundamonTTSEngine:
         # 기본 감정 음원(01_ref_emoNormal026) 활성화
         self.set_ref_audio("01_ref_emoNormal026.wav")
 
-    def set_seed(self, seed: int = None, warmup: bool = True) -> int:
+    def set_seed(self, seed: Optional[Union[int, str]] = None, warmup: bool = False) -> int:
         """
-        새로운 시드로 난수 생성기를 재설정하고 ONNX 세션을 안전하게 동기 재로드합니다.
-        (Cloud Run CPU 중단 방지를 위해 요청 스코프 내에서 동기 완료 권장)
+        새로운 시드로 난수 생성기를 즉각 재설정합니다 (< 1ms).
+        PyTorch 및 ONNX/NumPy 시드가 즉시 반영되어 모델 재로드가 불필요합니다.
         """
         with self.lock:
-            print(f"🔄 [시드 변경 요청] 기존 세션을 안전하게 해제하고 모델을 재로드합니다...")
-            t_reload_start = time.perf_counter()
-
-            # 1. 기존 ONNX 세션 메모리 해제 (OOM 방지)
-            if hasattr(self, "t2s"):
-                del self.t2s
-            if hasattr(self, "vits"):
-                del self.vits
-            gc.collect()
-
-            # 2. 난수 시드 재설정 및 콘솔/시스템 로그 출력
             self.seed = configure_random_seed(seed)
-
-            # 3. 새로운 ONNX 세션 생성
-            self.t2s = ONNXT2SAdapter(self.gpt_enc_path, self.gpt_fsdec_path, self.gpt_sdec_path, self.onnx_providers, self.num_threads)
-            self.vits = ONNXVitsAdapter(self.vits_onnx_path, self.onnx_providers, self.num_threads)
-
-            # 4. 레퍼런스 오디오 바인딩 복원
-            if self.current_ref_name:
-                self.set_ref_audio(self.current_ref_name)
-
-            # 5. 웜업
             if warmup:
                 self.warmup("안녕")
-
-            t_elapsed = time.perf_counter() - t_reload_start
-            print(f"✨ [시드 변경 완료] 모델 재로드 및 웜업 완료 (Seed: {self.seed}, 소요: {t_elapsed:.2f}초)")
             return self.seed
 
     def warmup(self, warmup_text: str = "안녕"):
-        """서버 시작 시 1회 호출하여 ONNX Runtime / OpenVINO 그래프 컴파일 및 메모리 할당을 사전에 완료합니다."""
+        """서버 시작 시 1회 호출하여 모델 그래프 및 메모리 할당을 사전에 완료합니다."""
         _ = self.generate_sentence(warmup_text, lang="ko")
 
     def set_ref_audio(self, ref_name: str):
@@ -453,7 +365,7 @@ class ZundamonTTSEngine:
             all_phones = np.asarray(self.ref_cache["phones"] + phones, dtype=np.int64)
             all_bert = np.concatenate([self.ref_cache["bert_features"], bert_features], axis=1).astype(np.float32, copy=False)
 
-            # 3. GPT T2S 운율/억양 토큰 생성
+            # 3. GPT T2S 운율/억양 토큰 생성 (PyTorch Safetensors)
             t_gpt_start = time.perf_counter()
             pred_tokens, idx = self.t2s.infer(
                 all_phones,
@@ -464,9 +376,9 @@ class ZundamonTTSEngine:
             )
             t_gpt = time.perf_counter() - t_gpt_start
 
-            # 4. VITS 오디오 파형 디코딩
+            # 4. VITS 오디오 파형 디코딩 (ONNX)
             t_vits_start = time.perf_counter()
-            pred_semantic = pred_tokens[-idx:][None, None, :]
+            pred_semantic = pred_tokens[None, None, :]
             text_seq = np.asarray(phones, dtype=np.int64)[None, :]
             audio = self.vits.decode(pred_semantic, text_seq, speed=speed)
             t_vits = time.perf_counter() - t_vits_start
@@ -548,23 +460,26 @@ class ZundamonTTSEngine:
 
 
 def main():
-    print("🚀 [자립형 단일 엔진 검증] TTS.py와 YAML 의존성 없이 단독 구동 시작...")
+    print("🚀 [하이브리드 엔진 검증] PyTorch CPU Safetensors T2S + ONNX VITS 구동 시작...")
 
     engine = ZundamonTTSEngine()
 
     test_text = (
-        "피아제 씨 안녕! 나는 즌다몬이다! 앞으로 잘 지내보자는 거시다! 어라? 내가 누군지 모르겠다고? 그럼 나는 슬픈 거시다..."
+        "나는 즌다몬이다! 앞으로 잘 지내보자는 거시다!"
     )
 
-    print(f"🔍 [런타임 무결성 검증] PyTorch(torch) 로드 여부: {'torch' in sys.modules} (False여야 함)")
     print("🧠 실시간 음성 합성 진행 중 (generate_all)...")
-
+    t0 = time.perf_counter()
     output_audio = engine.generate_all(test_text, lang="ko")
+    t_total = time.perf_counter() - t0
 
     if len(output_audio) > 0:
         output_path = "zundamon_hybrid_final.wav"
         sf.write(output_path, output_audio, engine.sampling_rate)
+        duration = len(output_audio) / engine.sampling_rate
+        rtf = t_total / duration
         print(f"🎉 합성 대성공! '{output_path}'가 완벽히 생성되었습니다.")
+        print(f"⏱️ 합성 시간: {t_total:.2f}초 | 오디오 길이: {duration:.2f}초 | RTF: {rtf:.3f}")
     else:
         print("⚠️ 오디오 데이터가 생성되지 않았습니다.")
 

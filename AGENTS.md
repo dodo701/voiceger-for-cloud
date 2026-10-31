@@ -5,8 +5,8 @@ Read this file fully before changing code.
 
 ## 1. What this project is
 
-A **CPU-only, torch-free inference server** for the Zundamon voice (GPT-SoVITS v2 fine-tune).
-It is a fork of voiceger-v2 whose goal is to remove overhead and maximize TTS speed on CPU
+A **CPU-only Hybrid inference server (PyTorch CPU Safetensors T2S + ONNX VITS)** for the Zundamon voice (GPT-SoVITS v2 fine-tune).
+It combines PyTorch CPU autoregressive decoding for T2S with ONNX Runtime for VITS to maximize TTS speed on CPU
 (primary target: Google Cloud Run Gen2, Intel Xeon / AMD EPYC).
 
 - Languages synthesized: **Korean (`ko`), Japanese (`ja`), English (`en`)**. Chinese is **not** supported at runtime.
@@ -31,7 +31,8 @@ It is a fork of voiceger-v2 whose goal is to remove overhead and maximize TTS sp
 | `preload.py` | **Offline** builder of `ref_cache.npz` (needs torch + CNHuBERT) | No |
 | `onnx_quntization.py` | **Offline** INT8 dynamic quantization of the `sdec` model (filename typo is intentional history; do not rename without updating references) | No |
 | `debug.py` | gRPC client for manual testing against `localhost:50051` | No |
-| `GPT_SoVITS/`, `tools/`, `feature_extractor/` | Legacy upstream code, only used by offline scripts | No (`GPT_SoVITS/` is dockerignored) |
+| `GPT_SoVITS/AR/` | Lightweight PyTorch T2S decoder (KV-cache autoregressive infer) | Yes |
+| `tools/`, `GPT_SoVITS/feature_extractor/` | Legacy offline tools and feature extractors | No |
 | `benchmark.py` | Currently empty placeholder | No |
 
 > `TTS.py` (legacy PyTorch pipeline) and `onnx_export.py` no longer exist in the working tree.
@@ -48,7 +49,7 @@ flowchart LR
     end
     subgraph Engine["infer_tts_minimal.py"]
         Eng["ZundamonTTSEngine<br/>(RLock-guarded)"]
-        T2S["ONNXT2SAdapter<br/>encoder + fsdec + sdec(INT8)"]
+        T2S["PyTorchT2SAdapter<br/>(zudamon_style_1-e15.safetensors)"]
         Vits["ONNXVitsAdapter"]
     end
     TP["TextPreprocessor<br/>split + G2P + zero BERT"]
@@ -76,7 +77,7 @@ sequenceDiagram
     participant S as TTSService
     participant E as ZundamonTTSEngine
     participant P as TextPreprocessor
-    participant G as ONNXT2SAdapter
+    participant G as PyTorchT2SAdapter
     participant V as ONNXVitsAdapter
 
     C->>S: TextChunkRequest(text, lang, ref_audio_name, speed, seed)
@@ -136,8 +137,8 @@ flowchart LR
 
 Two requirement files with a strict split:
 
-- `requirements.txt` — **runtime only. No torch, no transformers.** Installed in the Docker image.
-  - Inference: `numpy`, `onnxruntime-openvino`, `openvino`
+- `requirements.txt` — **runtime only.** Installed in the Docker image.
+  - Inference: `torch` (CPU wheel), `safetensors`, `numpy`, `onnxruntime-openvino`, `openvino`
   - Audio: `soundfile`, `soxr`
   - G2P: `LangSegment`, `py3langid`, `pyopenjtalk` (needs CMake to build), `jamo`, `ko-pron`, `g2pk2`, `python-mecab-ko` (+ `-dic`), `eunjeon` (Windows only), `nltk`, `g2p-en`, `wordsegment`
   - Serving: `grpcio`, `grpcio-health-checking`, `protobuf`, `fastapi`
@@ -154,7 +155,7 @@ Rules:
 
 ## 5. Hard invariants (do not break)
 
-1. **No PyTorch at runtime.** `infer_tts_minimal.py` main() prints whether `torch` is in `sys.modules`; it must be `False`. `TextPreprocessor.py` must stay pure NumPy.
+1. **Hybrid Architecture (PyTorch CPU for T2S, ONNX for VITS).** PyTorch CPU runs the autoregressive T2S decoder via Safetensors. VITS remains ONNX for fast single-pass decoding. `TextPreprocessor.py` remains pure NumPy.
 2. **BERT is always zeros** for `ko`/`ja`/`en`. `chinese-roberta-wwm-ext-large` was only ever used for Chinese upstream; ko/ja already used zero tensors in the original WebUI path, so the RoBERTa path was removed on purpose. Shape is `(1024, n_phones)`, float32. `ref_cache.npz` stores matching `(1024, 56)` zeros for the reference prompt.
 3. **No network access at runtime.** The image sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. NLTK data, the pyopenjtalk dictionary and ONNX weights are baked in at build time.
 4. **No file named `logging.py` anywhere in the repo root** (shadows the stdlib and breaks `cloud_logger.py`; a stale `logging.cpython-311.pyc` exists in `__pycache__`, ignore it).
@@ -187,7 +188,7 @@ Rules:
 ### 6.3 Seed handling and determinism
 
 - Randomness lives **inside the ONNX graphs** (`RandomNormalLike` in `sdec` for sampling and in the VITS decoder for noise). Python/NumPy seeds alone do not affect it.
-- `ort.set_seed()` only takes effect for **sessions created after the call**. Changing the seed therefore requires rebuilding the sessions: `ZundamonTTSEngine.set_seed()` deletes the adapters, calls `gc.collect()`, reseeds, recreates the sessions, rebinds the reference audio, and optionally warms up. This takes tens of seconds with OpenVINO (~57 s observed locally).
+- With PyTorch T2S, `torch.manual_seed(seed)` takes **immediate effect (< 1ms)** without recreating sessions or reloading weights. `set_seed()` applies `torch.manual_seed(seed)`, `np.random.seed(seed)`, and `random.seed(seed)` instantly.
 - Same seed does **not** guarantee identical audio: the RNG state advances with every sentence, and multi-threaded float reductions plus provider/quantization differences perturb sampling. Treat seeds as a tone/prosody control, not a bit-exact guarantee.
 - `seed=None` / `-1` / `""` picks a random seed; the chosen value is always printed (`🎲 [시드 설정] ...`). Preserve that log line.
 - `ZundamonTTSEngine.lock` is an **`RLock`** on purpose: `set_seed()` holds it while calling `warmup()` -> `generate_sentence_with_latency()`. Switching to `Lock` deadlocks the `SetEngineSeed` RPC.

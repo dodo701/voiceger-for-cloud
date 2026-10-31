@@ -1,17 +1,12 @@
-from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub import hf_hub_download
 import os
 
 REPO_ID = "Geukrak/onnx_zundamon"
-api = HfApi()
-files = api.list_repo_files(repo_id=REPO_ID)
 
 # Define mappings from file in repo to local directory
 downloads = [
-    ("zundamon_t2s_encoder.onnx", "GPT_weights_v2"),
+    ("zudamon_style_1-e15.safetensors", "GPT_weights_v2"),
     ("zundamon_vits.onnx", "SoVITS_weights_v2"),
-    ("zundamon_t2s_sdec.onnx", "GPT_weights_v2"),
-    ("zundamon_t2s_sdec_int8.onnx", "GPT_weights_v2"),
-    ("zundamon_t2s_fsdec.onnx", "GPT_weights_v2"),
 ]
 
 for file_name, local_dir in downloads:
