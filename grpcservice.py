@@ -70,6 +70,11 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
             if item is sentinel:
                 break
 
+            # 클라이언트가 요청에서 시드 변경을 지정한 경우 동기 반영
+            if getattr(item, "seed", 0) != 0 and item.seed != self.engine.seed:
+                logger.info(f"🎲 [스트림 내 시드 변경 감지] {self.engine.seed} -> {item.seed}")
+                self.engine.set_seed(item.seed, warmup=False)
+
             text = item.text.strip()
             lang = item.text_lang or "ko"
             ref_name = item.ref_audio_name or "01_ref_emoNormal026.wav"
@@ -110,6 +115,10 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
 
     def SynthesizeSentenceStream(self, request, context):
         """단일 문장 요청을 받아 작은 PCM 청크(1024 샘플 단위)로 쪼개어 스트리밍 반환"""
+        if getattr(request, "seed", 0) != 0 and request.seed != self.engine.seed:
+            logger.info(f"🎲 [요청 내 시드 변경 감지] {self.engine.seed} -> {request.seed}")
+            self.engine.set_seed(request.seed, warmup=False)
+
         text = request.text.strip()
         lang = request.text_lang or "ko"
         ref_name = request.ref_audio_name or "01_ref_emoNormal026.wav"
@@ -139,6 +148,10 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
 
     def SynthesizeSentence(self, request, context):
         """단일 문장 요청에 대해 완성된 전체 PCM 오디오 일괄 반환 (Unary)"""
+        if getattr(request, "seed", 0) != 0 and request.seed != self.engine.seed:
+            logger.info(f"🎲 [요청 내 시드 변경 감지] {self.engine.seed} -> {request.seed}")
+            self.engine.set_seed(request.seed, warmup=False)
+
         text = request.text.strip()
         lang = request.text_lang or "ko"
         ref_name = request.ref_audio_name or "01_ref_emoNormal026.wav"
@@ -158,6 +171,32 @@ class TTSService(tts_pb2_grpc.TTSServiceServicer):
             latency=latency_proto,
         )
 
+    def SetEngineSeed(self, request, context):
+        """엔진 난수 시드 재설정 및 모델 동기 재로드 (Cloud Run CPU 스로틀링 방지)"""
+        requested_seed = request.seed
+        logger.info(f"🎲 [시드 변경 RPC 요청 수신] requested_seed={requested_seed}")
+        t0 = time.perf_counter()
+        try:
+            actual_seed = self.engine.set_seed(requested_seed, warmup=True)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            msg = f"시드가 성공적으로 변경되었습니다: {actual_seed} (소요: {elapsed_ms:.1f}ms)"
+            logger.info(f"✅ {msg}")
+            return tts_pb2.SetSeedResponse(
+                success=True,
+                current_seed=actual_seed,
+                message=msg,
+                elapsed_ms=elapsed_ms,
+            )
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.error(f"🚨 시드 변경 실패: {e}", exc_info=True)
+            return tts_pb2.SetSeedResponse(
+                success=False,
+                current_seed=getattr(self.engine, "seed", -1),
+                message=str(e),
+                elapsed_ms=elapsed_ms,
+            )
+
 
 def serve(port: int = None):
     global tts_engine
@@ -168,6 +207,7 @@ def serve(port: int = None):
 
     logger.info("🚀 ZundamonTTSEngine 초기화 중...")
     tts_engine = ZundamonTTSEngine()
+    logger.info(f"🎲 [시드 로깅] 초기 구동 시드: {tts_engine.seed}")
     
     logger.info("🔥 [Warm-up] ONNX Runtime / OpenVINO 그래프 컴파일 및 웜업 진행 중...")
     t_warm = time.perf_counter()

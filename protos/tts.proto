@@ -13,6 +13,20 @@ service TTSService {
 
   // 단일 문장 요청 -> 완성된 전체 오디오 일괄 반환 (Unary)
   rpc SynthesizeSentence (TextChunkRequest) returns (AudioChunkResponse);
+
+  // 엔진 난수 시드 재설정 및 모델 동기 재로드 (Cloud Run CPU 스로틀링 방지)
+  rpc SetEngineSeed (SetSeedRequest) returns (SetSeedResponse);
+}
+
+message SetSeedRequest {
+  int64 seed = 1;              // -1 또는 0이면 랜덤 시드, 특정 양수면 해당 시드로 고정
+}
+
+message SetSeedResponse {
+  bool success = 1;            // 성공 여부
+  int64 current_seed = 2;      // 설정된 실제 시드 값
+  string message = 3;          // 결과 안내 메시지
+  float elapsed_ms = 4;        // 재로드 및 웜업 소요 시간 (밀리초)
 }
 
 message TextChunkRequest {
@@ -22,6 +36,7 @@ message TextChunkRequest {
   string ref_audio_name = 4;   // 감정 레퍼런스 음원 ("01_ref_emoNormal026.wav" 등)
   float speed = 5;             // 배속 (기본: 1.0)
   bool is_end_of_stream = 6;   // 클라이언트 텍스트 스트림의 마지막 문장 여부
+  int64 seed = 7;              // 선택적 시드 변경 (0이면 기존 시드 유지)
 }
 
 message PipelineLatency {

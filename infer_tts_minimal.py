@@ -2,11 +2,13 @@ import os
 import sys
 import time
 import math
+import gc
+import random
+import threading
 import platform
 import soundfile as sf
 import onnxruntime as ort
 import numpy as np
-import cProfile
 from typing import Generator, List, Tuple, Dict
 from tqdm import tqdm
 
@@ -250,6 +252,19 @@ class ONNXVitsAdapter:
         return audio_onnx
 
 
+def configure_random_seed(seed: int = None) -> int:
+    """글로벌 난수 시드를 설정하고 콘솔/로그에 출력합니다."""
+    if seed is None or seed == -1 or seed == "":
+        seed = random.randrange(1 << 32)
+    seed = int(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    ort.set_seed(seed)
+    print(f"🎲 [시드 설정] 엔진 난수 시드가 설정되었습니다: {seed}")
+    return seed
+
+
 class ZundamonTTSEngine:
     """레거시 TTS.py 의존성을 100% 제거한 단일 자립형 Full ONNX + 순수 NumPy 음성 합성 엔진"""
 
@@ -261,25 +276,32 @@ class ZundamonTTSEngine:
         vits_onnx_path: str = None,
         ref_cache_path: str = None,
         num_threads: int = None,
+        seed: int = None,
     ):
+        self.lock = threading.Lock()
         self.num_threads = num_threads or get_container_cpu_threads()
         os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
         self.onnx_providers = get_onnx_providers(self.num_threads)
 
-        # 모델 기본 경로 세팅
-        gpt_enc_path = gpt_enc_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_encoder.onnx")
-        gpt_fsdec_path = gpt_fsdec_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_fsdec.onnx")
-        vits_onnx_path = vits_onnx_path or os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
-        ref_cache_path = ref_cache_path or os.path.join(now_dir, "reference_audios", "ref_cache.npz")
+        # 모델 기본 경로 세팅 및 보관 (동적 재로드 지원)
+        self.gpt_enc_path = gpt_enc_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_encoder.onnx")
+        self.gpt_fsdec_path = gpt_fsdec_path or os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_fsdec.onnx")
+        self.vits_onnx_path = vits_onnx_path or os.path.join(now_dir, "SoVITS_weights_v2", "zundamon_vits.onnx")
+        self.ref_cache_path = ref_cache_path or os.path.join(now_dir, "reference_audios", "ref_cache.npz")
 
         if gpt_sdec_path is None:
             gpt_sdec_int8_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec_int8.onnx")
             gpt_sdec_fp32_path = os.path.join(now_dir, "GPT_weights_v2", "zundamon_t2s_sdec.onnx")
-            gpt_sdec_path = gpt_sdec_int8_path if os.path.exists(gpt_sdec_int8_path) else gpt_sdec_fp32_path
+            self.gpt_sdec_path = gpt_sdec_int8_path if os.path.exists(gpt_sdec_int8_path) else gpt_sdec_fp32_path
+        else:
+            self.gpt_sdec_path = gpt_sdec_path
 
-        # 1. 사전 베이킹 캐시 로드 (NPZ)
-        print(f"📦 [캐시 로드] 사전 베이킹 레퍼런스 캐시: {os.path.basename(ref_cache_path)}")
-        npz_data = np.load(ref_cache_path, allow_pickle=True)
+        # 1. 난수 시드 설정
+        self.seed = configure_random_seed(seed)
+
+        # 2. 사전 베이킹 캐시 로드 (NPZ)
+        print(f"📦 [캐시 로드] 사전 베이킹 레퍼런스 캐시: {os.path.basename(self.ref_cache_path)}")
+        npz_data = np.load(self.ref_cache_path, allow_pickle=True)
         self.ref_cache = {
             "prompt_text": str(npz_data["prompt_text"].item() if npz_data["prompt_text"].ndim == 0 else npz_data["prompt_text"]),
             "prompt_lang": str(npz_data["prompt_lang"].item() if npz_data["prompt_lang"].ndim == 0 else npz_data["prompt_lang"]),
@@ -289,13 +311,13 @@ class ZundamonTTSEngine:
             "audios": npz_data["audios"].item(),
         }
 
-        # 2. 텍스트 전처리기 (순수 NumPy G2P)
+        # 3. 텍스트 전처리기 (순수 NumPy G2P)
         self.text_preprocessor = TextPreprocessor()
 
-        # 3. ONNX 딥러닝 엔진 로드
+        # 4. ONNX 딥러닝 엔진 로드
         print(f"📦 [엔진 로드] Full ONNX GPT 3종 + VITS 디코더 로딩 중...")
-        self.t2s = ONNXT2SAdapter(gpt_enc_path, gpt_fsdec_path, gpt_sdec_path, self.onnx_providers, self.num_threads)
-        self.vits = ONNXVitsAdapter(vits_onnx_path, self.onnx_providers, self.num_threads)
+        self.t2s = ONNXT2SAdapter(self.gpt_enc_path, self.gpt_fsdec_path, self.gpt_sdec_path, self.onnx_providers, self.num_threads)
+        self.vits = ONNXVitsAdapter(self.vits_onnx_path, self.onnx_providers, self.num_threads)
 
         self.sampling_rate = 32000
         self.hz = 50
@@ -304,6 +326,41 @@ class ZundamonTTSEngine:
 
         # 기본 감정 음원(01_ref_emoNormal026) 활성화
         self.set_ref_audio("01_ref_emoNormal026.wav")
+
+    def set_seed(self, seed: int = None, warmup: bool = True) -> int:
+        """
+        새로운 시드로 난수 생성기를 재설정하고 ONNX 세션을 안전하게 동기 재로드합니다.
+        (Cloud Run CPU 중단 방지를 위해 요청 스코프 내에서 동기 완료 권장)
+        """
+        with self.lock:
+            print(f"🔄 [시드 변경 요청] 기존 세션을 안전하게 해제하고 모델을 재로드합니다...")
+            t_reload_start = time.perf_counter()
+
+            # 1. 기존 ONNX 세션 메모리 해제 (OOM 방지)
+            if hasattr(self, "t2s"):
+                del self.t2s
+            if hasattr(self, "vits"):
+                del self.vits
+            gc.collect()
+
+            # 2. 난수 시드 재설정 및 콘솔/시스템 로그 출력
+            self.seed = configure_random_seed(seed)
+
+            # 3. 새로운 ONNX 세션 생성
+            self.t2s = ONNXT2SAdapter(self.gpt_enc_path, self.gpt_fsdec_path, self.gpt_sdec_path, self.onnx_providers, self.num_threads)
+            self.vits = ONNXVitsAdapter(self.vits_onnx_path, self.onnx_providers, self.num_threads)
+
+            # 4. 레퍼런스 오디오 바인딩 복원
+            if self.current_ref_name:
+                self.set_ref_audio(self.current_ref_name)
+
+            # 5. 웜업
+            if warmup:
+                self.warmup("안녕")
+
+            t_elapsed = time.perf_counter() - t_reload_start
+            print(f"✨ [시드 변경 완료] 모델 재로드 및 웜업 완료 (Seed: {self.seed}, 소요: {t_elapsed:.2f}초)")
+            return self.seed
 
     def warmup(self, warmup_text: str = "안녕"):
         """서버 시작 시 1회 호출하여 ONNX Runtime / OpenVINO 그래프 컴파일 및 메모리 할당을 사전에 완료합니다."""
@@ -342,11 +399,6 @@ class ZundamonTTSEngine:
         Returns:
             (audio, latency_dict)
         """
-        t_start = time.perf_counter()
-
-        if ref_name and ref_name != self.current_ref_name:
-            self.set_ref_audio(ref_name)
-
         clean_text = text.strip()
         if not clean_text:
             return np.zeros(0, dtype=np.float32), {
@@ -358,62 +410,68 @@ class ZundamonTTSEngine:
                 "rtf": 0.0,
             }
 
-        # 1. 텍스트 G2P 음소 분석
-        t_g2p_start = time.perf_counter()
-        phones, bert_features, _ = self.text_preprocessor.segment_and_extract_feature_for_text(clean_text, lang, "v2")
-        t_g2p = time.perf_counter() - t_g2p_start
+        with self.lock:
+            t_start = time.perf_counter()
 
-        if not phones:
-            return np.zeros(0, dtype=np.float32), {
+            if ref_name and ref_name != self.current_ref_name:
+                self.set_ref_audio(ref_name)
+
+            # 1. 텍스트 G2P 음소 분석
+            t_g2p_start = time.perf_counter()
+            phones, bert_features, _ = self.text_preprocessor.segment_and_extract_feature_for_text(clean_text, lang, "v2")
+            t_g2p = time.perf_counter() - t_g2p_start
+
+            if not phones:
+                return np.zeros(0, dtype=np.float32), {
+                    "text_frontend_ms": round(t_g2p * 1000, 2),
+                    "gpt_latent_ms": 0.0,
+                    "vits_decode_ms": 0.0,
+                    "total_elapsed_ms": round((time.perf_counter() - t_start) * 1000, 2),
+                    "audio_duration_sec": 0.0,
+                    "rtf": 0.0,
+                }
+
+            # 2. 레퍼런스 프롬프트 텐서와 결합
+            all_phones = np.asarray(self.ref_cache["phones"] + phones, dtype=np.int64)
+            all_bert = np.concatenate([self.ref_cache["bert_features"], bert_features], axis=1).astype(np.float32, copy=False)
+
+            # 3. GPT T2S 운율/억양 토큰 생성
+            t_gpt_start = time.perf_counter()
+            pred_tokens, idx = self.t2s.infer(
+                all_phones,
+                self.prompt_semantic,
+                all_bert,
+                top_k=top_k,
+                early_stop_num=self.hz * self.max_sec,
+            )
+            t_gpt = time.perf_counter() - t_gpt_start
+
+            # 4. VITS 오디오 파형 디코딩
+            t_vits_start = time.perf_counter()
+            pred_semantic = pred_tokens[-idx:][None, None, :]
+            text_seq = np.asarray(phones, dtype=np.int64)[None, :]
+            audio = self.vits.decode(pred_semantic, text_seq, speed=speed)
+            t_vits = time.perf_counter() - t_vits_start
+
+            # 5. 피크 방지 정규화
+            max_val = np.abs(audio).max()
+            if max_val > 1.0:
+                audio = audio / max_val
+
+            t_total = time.perf_counter() - t_start
+            audio_duration_sec = len(audio) / self.sampling_rate
+            rtf = (t_total / audio_duration_sec) if audio_duration_sec > 0 else 0.0
+
+            latency = {
                 "text_frontend_ms": round(t_g2p * 1000, 2),
-                "gpt_latent_ms": 0.0,
-                "vits_decode_ms": 0.0,
-                "total_elapsed_ms": round((time.perf_counter() - t_start) * 1000, 2),
-                "audio_duration_sec": 0.0,
-                "rtf": 0.0,
+                "gpt_latent_ms": round(t_gpt * 1000, 2),
+                "vits_decode_ms": round(t_vits * 1000, 2),
+                "total_elapsed_ms": round(t_total * 1000, 2),
+                "audio_duration_sec": round(audio_duration_sec, 3),
+                "rtf": round(rtf, 3),
             }
 
-        # 2. 레퍼런스 프롬프트 텐서와 결합
-        all_phones = np.asarray(self.ref_cache["phones"] + phones, dtype=np.int64)
-        all_bert = np.concatenate([self.ref_cache["bert_features"], bert_features], axis=1).astype(np.float32, copy=False)
-
-        # 3. GPT T2S 운율/억양 토큰 생성
-        t_gpt_start = time.perf_counter()
-        pred_tokens, idx = self.t2s.infer(
-            all_phones,
-            self.prompt_semantic,
-            all_bert,
-            top_k=top_k,
-            early_stop_num=self.hz * self.max_sec,
-        )
-        t_gpt = time.perf_counter() - t_gpt_start
-
-        # 4. VITS 오디오 파형 디코딩
-        t_vits_start = time.perf_counter()
-        pred_semantic = pred_tokens[-idx:][None, None, :]
-        text_seq = np.asarray(phones, dtype=np.int64)[None, :]
-        audio = self.vits.decode(pred_semantic, text_seq, speed=speed)
-        t_vits = time.perf_counter() - t_vits_start
-
-        # 5. 피크 방지 정규화
-        max_val = np.abs(audio).max()
-        if max_val > 1.0:
-            audio = audio / max_val
-
-        t_total = time.perf_counter() - t_start
-        audio_duration_sec = len(audio) / self.sampling_rate
-        rtf = (t_total / audio_duration_sec) if audio_duration_sec > 0 else 0.0
-
-        latency = {
-            "text_frontend_ms": round(t_g2p * 1000, 2),
-            "gpt_latent_ms": round(t_gpt * 1000, 2),
-            "vits_decode_ms": round(t_vits * 1000, 2),
-            "total_elapsed_ms": round(t_total * 1000, 2),
-            "audio_duration_sec": round(audio_duration_sec, 3),
-            "rtf": round(rtf, 3),
-        }
-
-        return audio, latency
+            return audio, latency
 
     def generate_sentence(
         self,
@@ -477,8 +535,7 @@ def main():
     engine = ZundamonTTSEngine()
 
     test_text = (
-        "야호! 나는 즌다몬인 거시다! 오늘은 내 한국어 목소리를 테스트해서, 여러 모델을 비교해 본다고 들은 거시다. "
-        "후훗, 어떤 내 목소리가 제일 귀엽고, 즌다모찌에 대한 사랑을 잘 표현하는지 똑똑히 들어보란 거시다!"
+        "피아제 씨 안녕! 나는 즌다몬이다! 앞으로 잘 지내보자는 거시다! 어라? 내가 누군지 모르겠다고? 그럼 나는 슬픈 거시다..."
     )
 
     print(f"🔍 [런타임 무결성 검증] PyTorch(torch) 로드 여부: {'torch' in sys.modules} (False여야 함)")
@@ -489,8 +546,7 @@ def main():
     if len(output_audio) > 0:
         output_path = "zundamon_hybrid_final.wav"
         sf.write(output_path, output_audio, engine.sampling_rate)
-        print(f"🎉 합성 대성공! TTS.py 없이 자립형 엔진으로 '{output_path}'가 완벽히 생성되었습니다.")
-        print(f"🔍 [최종 무결성 검증] 추론 완료 후 PyTorch(torch) 로드 여부: {'torch' in sys.modules}")
+        print(f"🎉 합성 대성공! '{output_path}'가 완벽히 생성되었습니다.")
     else:
         print("⚠️ 오디오 데이터가 생성되지 않았습니다.")
 

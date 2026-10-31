@@ -298,7 +298,7 @@ from g2pk2 import G2p
 
 _g2p_ko = G2p()
 
-_korean_classifiers = '군데 권 개 그루 닢 대 두 마리 모 모금 뭇 발 발짝 방 번 벌 보루 살 수 술 시 쌈 움큼 정 짝 채 척 첩 축 켤레 톨 통'
+_korean_classifiers = '군데 권 개 그루 닢 대 두 마리 모 모금 뭇 발 발짝 방 번 벌 보루 살 수 술 시 쌈 움큼 정 짝 채 척 첩 축 켤레 톨 통 명 장 병 잔 조각 상자 줄 손 포기 마디 가지'
 _hangul_divided = [(re.compile('%s' % x[0]), x[1]) for x in [
     ('ㅘ', 'ㅗㅏ'), ('ㅙ', 'ㅗㅐ'), ('ㅚ', 'ㅗㅣ'), ('ㅝ', 'ㅜㅓ'),
     ('ㅞ', 'ㅜㅔ'), ('ㅟ', 'ㅜㅣ'), ('ㅢ', 'ㅡㅣ'), ('ㅑ', 'ㅣㅏ'),
@@ -336,92 +336,120 @@ def divide_hangul(text):
         text = re.sub(regex, replacement, text)
     return text
 
-def hangul_number(num, sino=True):
-    num = re.sub(',', '', num)
-    if num == '0':
-        return '영'
-    if not sino and num == '20':
-        return '스무'
-    digits = '123456789'
-    names = '일이삼사오육칠팔구'
-    digit2name = {d: n for d, n in zip(digits, names)}
-    modifiers = '한 두 세 네 다섯 여섯 일곱 여덟 아홉'
-    decimals = '열 스물 서른 마흔 쉰 예순 일흔 여든 아흔'
-    digit2mod = {d: mod for d, mod in zip(digits, modifiers.split())}
-    digit2dec = {d: dec for d, dec in zip(digits, decimals.split())}
-    spelledout = []
-    for i, digit in enumerate(num):
-        i = len(num) - i - 1
-        if sino:
-            if i == 0:
-                name = digit2name.get(digit, '')
-            elif i == 1:
-                name = digit2name.get(digit, '') + '십'
-                name = name.replace('일십', '십')
-        else:
-            if i == 0:
-                name = digit2mod.get(digit, '')
-            elif i == 1:
-                name = digit2dec.get(digit, '')
-        if digit == '0':
-            if i % 4 == 0:
-                last_three = spelledout[-min(3, len(spelledout)):]
-                if ''.join(last_three) == '':
-                    spelledout.append('')
-                    continue
-            else:
-                spelledout.append('')
-                continue
-        if i == 2:
-            name = digit2name.get(digit, '') + '백'
-            name = name.replace('일백', '백')
-        elif i == 3:
-            name = digit2name.get(digit, '') + '천'
-            name = name.replace('일천', '천')
-        elif i == 4:
-            name = digit2name.get(digit, '') + '만'
-            name = name.replace('일만', '만')
-        elif i == 5:
-            name = digit2name.get(digit, '') + '십'
-            name = name.replace('일십', '십')
-        elif i == 6:
-            name = digit2name.get(digit, '') + '백'
-            name = name.replace('일백', '백')
-        elif i == 7:
-            name = digit2name.get(digit, '') + '천'
-            name = name.replace('일천', '천')
-        elif i == 8:
-            name = digit2name.get(digit, '') + '억'
-        elif i == 9:
-            name = digit2name.get(digit, '') + '십'
-        elif i == 10:
-            name = digit2name.get(digit, '') + '백'
-        elif i == 11:
-            name = digit2name.get(digit, '') + '천'
-        elif i == 12:
-            name = digit2name.get(digit, '') + '조'
-        elif i == 13:
-            name = digit2name.get(digit, '') + '십'
-        elif i == 14:
-            name = digit2name.get(digit, '') + '백'
-        elif i == 15:
-            name = digit2name.get(digit, '') + '천'
-        spelledout.append(name)
-    return ''.join(elem for elem in spelledout)
+SINO_DIGITS = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구']
+SINO_SMALL_UNITS = ['', '십', '백', '천']
+SINO_BIG_UNITS = ['', '만', '억', '조', '경']
 
-def number_to_hangul(text):
-    tokens = set(re.findall(r'(\d[\d,]*)([\uac00-\ud71f]+)', text))
-    for token in tokens:
-        num, classifier = token
-        if classifier[:2] in _korean_classifiers or classifier[0] in _korean_classifiers:
-            spelledout = hangul_number(num, sino=False)
+PURE_ONES = ['', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉']
+PURE_TENS = ['', '열', '스물', '서른', '마흔', '쉰', '예순', '일흔', '여든', '아흔']
+
+def sino_number(num_str: str) -> str:
+    cleaned = re.sub(r'[,_]', '', str(num_str)).lstrip('0')
+    if not cleaned:
+        return '영'
+    chunks = []
+    while cleaned:
+        chunks.append(cleaned[-4:])
+        cleaned = cleaned[:-4]
+    result_parts = []
+    for big_idx, chunk in enumerate(chunks):
+        chunk_val = int(chunk)
+        if chunk_val == 0:
+            continue
+        chunk_str = ''
+        chunk_len = len(chunk)
+        for i, d_char in enumerate(chunk):
+            d = int(d_char)
+            pos = chunk_len - 1 - i
+            if d == 0:
+                continue
+            if pos == 0:
+                chunk_str += SINO_DIGITS[d]
+            else:
+                if d == 1:
+                    chunk_str += SINO_SMALL_UNITS[pos]
+                else:
+                    chunk_str += SINO_DIGITS[d] + SINO_SMALL_UNITS[pos]
+        big_unit = SINO_BIG_UNITS[big_idx] if big_idx < len(SINO_BIG_UNITS) else ''
+        if big_unit:
+            if big_unit == '만' and chunk_str == '일':
+                chunk_str = ''
+            result_parts.append(chunk_str + big_unit)
         else:
-            spelledout = hangul_number(num, sino=True)
-        text = text.replace(f'{num}{classifier}', f'{spelledout}{classifier}')
-    digits = '0123456789'
-    names = '영일이삼사오육칠팔구'
-    for d, n in zip(digits, names):
-        text = text.replace(d, n)
+            result_parts.append(chunk_str)
+    return ''.join(reversed(result_parts))
+
+def pure_number(num_str: str) -> str:
+    val = int(re.sub(r'[,_]', '', str(num_str)))
+    if val <= 0 or val >= 100:
+        return sino_number(num_str)
+    if val == 20:
+        return '스무'
+    tens = val // 10
+    ones = val % 10
+    return PURE_TENS[tens] + PURE_ONES[ones]
+
+def hangul_number(num, sino=True):
+    num_clean = re.sub(r'[,_]', '', str(num))
+    if sino:
+        return sino_number(num_clean)
+    else:
+        return pure_number(num_clean)
+
+def number_to_hangul(text: str) -> str:
+    # 1. Phone numbers (e.g. 010-1234-5678, 02-123-4567)
+    def repl_phone(m):
+        def d2ko(d_str):
+            dig_map = {'0': '공', '1': '일', '2': '이', '3': '삼', '4': '사',
+                       '5': '오', '6': '육', '7': '칠', '8': '팔', '9': '구'}
+            return ''.join(dig_map.get(c, c) for c in d_str)
+        return f'{d2ko(m.group(1))} {d2ko(m.group(2))} {d2ko(m.group(3))}'
+    text = re.sub(r'(?<!\d)(0\d{1,2})-(\d{3,4})-(\d{4})(?!\d)', repl_phone, text)
+
+    # 2. Decimals (e.g. 3.14, 0.5, 14.5만)
+    def repl_decimal(m):
+        integer_part = sino_number(m.group(1))
+        dig_map = {'0': '영', '1': '일', '2': '이', '3': '삼', '4': '사',
+                   '5': '오', '6': '육', '7': '칠', '8': '팔', '9': '구'}
+        fraction_part = ''.join(dig_map.get(c, c) for c in m.group(2))
+        return f'{integer_part}점{fraction_part}'
+    text = re.sub(r'(\d[\d,]*)\.(\d+)', repl_decimal, text)
+
+    # 3. Percentages (e.g. 14%, 100%)
+    def repl_percent(m):
+        return f'{sino_number(m.group(1))}퍼센트'
+    text = re.sub(r'(\d[\d,]*)\s*%', repl_percent, text)
+
+    # 4. Numbers with attached/spaced classifiers or units
+    # e.g. 14만, 14만원, 14만 원, 14억, 14조, 14개, 14명, 14살, 1시, 14시, 30분
+    pure_classifier_set = set(_korean_classifiers.split())
+    def repl_classifier(m):
+        num_str = m.group(1)
+        space = m.group(2)
+        word = m.group(3)
+        val = int(re.sub(r'[,_]', '', num_str))
+
+        first_char = word[0]
+        # Hour (시): 1~12 is pure Korean (한 시, 세 시, 열두 시), 13+ is Sino-Korean (십사 시)
+        if word == '시' or first_char == '시':
+            if 1 <= val <= 12:
+                spelled = pure_number(num_str)
+            else:
+                spelled = sino_number(num_str)
+        elif word in pure_classifier_set or first_char in pure_classifier_set:
+            spelled = pure_number(num_str) if val < 100 else sino_number(num_str)
+        else:
+            # Multipliers and Sino-Korean units (만, 억, 조, 천, 백, 원, 년, 월, 일, 등, 호, 층, 분, 초)
+            spelled = sino_number(num_str)
+        return f'{spelled}{space}{word}'
+
+    text = re.sub(r'(\d[\d,]*?)(\s*)([가-힣]+)', repl_classifier, text)
+
+    # 5. Remaining standalone numbers
+    def repl_standalone(m):
+        return sino_number(m.group(0))
+    text = re.sub(r'(?<!\d)\d[\d,]*(?!\d)', repl_standalone, text)
+
     return text
 
 def _ko_post_replace_ph(ph):
@@ -436,7 +464,9 @@ def _ko_post_replace_ph(ph):
     return "停"
 
 def korean_g2p(text):
+    text = re.sub(r'\.{2,}|…{2,}', '…', text)
     text = latin_to_hangul(text)
+    text = number_to_hangul(text)
     text = _g2p_ko(text)
     text = divide_hangul(text)
     text = fix_g2pk2_error(text)
@@ -462,7 +492,7 @@ def get_english_module():
 def clean_text_direct(text: str, language: str, version: str = "v2"):
     lang = language.lower().replace("all_", "")
     if lang in {"ko", "korean"}:
-        norm_text = text
+        norm_text = re.sub(r'\.{2,}|…{2,}', '…', number_to_hangul(latin_to_hangul(text)))
         phones = korean_g2p(norm_text)
         word2ph = None
     elif lang in {"ja", "japanese"}:
@@ -477,7 +507,7 @@ def clean_text_direct(text: str, language: str, version: str = "v2"):
             phones = [','] + phones
         word2ph = None
     else:
-        norm_text = text
+        norm_text = re.sub(r'\.{2,}|…{2,}', '…', number_to_hangul(latin_to_hangul(text)))
         phones = korean_g2p(norm_text)
         word2ph = None
 

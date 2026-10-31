@@ -24,19 +24,23 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ttts.proto\x12\x03tts\"\x88\x01\n\x10TextChunkRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\x11\n\ttext_lang\x18\x03 \x01(\t\x12\x16\n\x0eref_audio_name\x18\x04 \x01(\t\x12\r\n\x05speed\x18\x05 \x01(\x02\x12\x18\n\x10is_end_of_stream\x18\x06 \x01(\x08\"\x9d\x01\n\x0fPipelineLatency\x12\x18\n\x10text_frontend_ms\x18\x01 \x01(\x02\x12\x15\n\rgpt_latent_ms\x18\x02 \x01(\x02\x12\x16\n\x0evits_decode_ms\x18\x03 \x01(\x02\x12\x18\n\x10total_elapsed_ms\x18\x04 \x01(\x02\x12\x1a\n\x12\x61udio_duration_sec\x18\x05 \x01(\x02\x12\x0b\n\x03rtf\x18\x06 \x01(\x02\"\x88\x01\n\x12\x41udioChunkResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08pcm_data\x18\x02 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x03 \x01(\x05\x12\x10\n\x08is_final\x18\x04 \x01(\x08\x12%\n\x07latency\x18\x05 \x01(\x0b\x32\x14.tts.PipelineLatency2\xe5\x01\n\nTTSService\x12\x43\n\rStreamChatTTS\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponse(\x01\x30\x01\x12L\n\x18SynthesizeSentenceStream\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponse0\x01\x12\x44\n\x12SynthesizeSentence\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ttts.proto\x12\x03tts\"\x1e\n\x0eSetSeedRequest\x12\x0c\n\x04seed\x18\x01 \x01(\x03\"]\n\x0fSetSeedResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x14\n\x0c\x63urrent_seed\x18\x02 \x01(\x03\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x12\n\nelapsed_ms\x18\x04 \x01(\x02\"\x96\x01\n\x10TextChunkRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\x11\n\ttext_lang\x18\x03 \x01(\t\x12\x16\n\x0eref_audio_name\x18\x04 \x01(\t\x12\r\n\x05speed\x18\x05 \x01(\x02\x12\x18\n\x10is_end_of_stream\x18\x06 \x01(\x08\x12\x0c\n\x04seed\x18\x07 \x01(\x03\"\x9d\x01\n\x0fPipelineLatency\x12\x18\n\x10text_frontend_ms\x18\x01 \x01(\x02\x12\x15\n\rgpt_latent_ms\x18\x02 \x01(\x02\x12\x16\n\x0evits_decode_ms\x18\x03 \x01(\x02\x12\x18\n\x10total_elapsed_ms\x18\x04 \x01(\x02\x12\x1a\n\x12\x61udio_duration_sec\x18\x05 \x01(\x02\x12\x0b\n\x03rtf\x18\x06 \x01(\x02\"\x88\x01\n\x12\x41udioChunkResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08pcm_data\x18\x02 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x03 \x01(\x05\x12\x10\n\x08is_final\x18\x04 \x01(\x08\x12%\n\x07latency\x18\x05 \x01(\x0b\x32\x14.tts.PipelineLatency2\xa1\x02\n\nTTSService\x12\x43\n\rStreamChatTTS\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponse(\x01\x30\x01\x12L\n\x18SynthesizeSentenceStream\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponse0\x01\x12\x44\n\x12SynthesizeSentence\x12\x15.tts.TextChunkRequest\x1a\x17.tts.AudioChunkResponse\x12:\n\rSetEngineSeed\x12\x13.tts.SetSeedRequest\x1a\x14.tts.SetSeedResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'tts_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_TEXTCHUNKREQUEST']._serialized_start=19
-  _globals['_TEXTCHUNKREQUEST']._serialized_end=155
-  _globals['_PIPELINELATENCY']._serialized_start=158
-  _globals['_PIPELINELATENCY']._serialized_end=315
-  _globals['_AUDIOCHUNKRESPONSE']._serialized_start=318
-  _globals['_AUDIOCHUNKRESPONSE']._serialized_end=454
-  _globals['_TTSSERVICE']._serialized_start=457
-  _globals['_TTSSERVICE']._serialized_end=686
+  _globals['_SETSEEDREQUEST']._serialized_start=18
+  _globals['_SETSEEDREQUEST']._serialized_end=48
+  _globals['_SETSEEDRESPONSE']._serialized_start=50
+  _globals['_SETSEEDRESPONSE']._serialized_end=143
+  _globals['_TEXTCHUNKREQUEST']._serialized_start=146
+  _globals['_TEXTCHUNKREQUEST']._serialized_end=296
+  _globals['_PIPELINELATENCY']._serialized_start=299
+  _globals['_PIPELINELATENCY']._serialized_end=456
+  _globals['_AUDIOCHUNKRESPONSE']._serialized_start=459
+  _globals['_AUDIOCHUNKRESPONSE']._serialized_end=595
+  _globals['_TTSSERVICE']._serialized_start=598
+  _globals['_TTSSERVICE']._serialized_end=887
 # @@protoc_insertion_point(module_scope)

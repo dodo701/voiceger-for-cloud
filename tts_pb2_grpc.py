@@ -49,6 +49,11 @@ class TTSServiceStub:
                 request_serializer=tts__pb2.TextChunkRequest.SerializeToString,
                 response_deserializer=tts__pb2.AudioChunkResponse.FromString,
                 _registered_method=True)
+        self.SetEngineSeed = channel.unary_unary(
+                '/tts.TTSService/SetEngineSeed',
+                request_serializer=tts__pb2.SetSeedRequest.SerializeToString,
+                response_deserializer=tts__pb2.SetSeedResponse.FromString,
+                _registered_method=True)
 
 
 class TTSServiceServicer:
@@ -77,6 +82,13 @@ class TTSServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SetEngineSeed(self, request, context):
+        """엔진 난수 시드 재설정 및 모델 동기 재로드 (Cloud Run CPU 스로틀링 방지)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TTSServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -94,6 +106,11 @@ def add_TTSServiceServicer_to_server(servicer, server):
                     servicer.SynthesizeSentence,
                     request_deserializer=tts__pb2.TextChunkRequest.FromString,
                     response_serializer=tts__pb2.AudioChunkResponse.SerializeToString,
+            ),
+            'SetEngineSeed': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetEngineSeed,
+                    request_deserializer=tts__pb2.SetSeedRequest.FromString,
+                    response_serializer=tts__pb2.SetSeedResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -177,6 +194,33 @@ class TTSService:
             '/tts.TTSService/SynthesizeSentence',
             tts__pb2.TextChunkRequest.SerializeToString,
             tts__pb2.AudioChunkResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetEngineSeed(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/tts.TTSService/SetEngineSeed',
+            tts__pb2.SetSeedRequest.SerializeToString,
+            tts__pb2.SetSeedResponse.FromString,
             options,
             channel_credentials,
             insecure,
