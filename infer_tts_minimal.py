@@ -171,7 +171,7 @@ class PyTorchT2SAdapter:
                         self.model.infer_panel_naive,
                         mode="reduce-overhead",
                         backend="inductor",
-                        dynamic=True,  # 텍스트 길이에 따라 텐서 크기가 변하는 GPT 루프에 필수
+                        dynamic=False,  # 정적 KV 캐시 할당으로 인해 False로 설정하여 메모리 오버헤드 최적화
                     )
                 except Exception as e:
                     print(f"⚠️ torch.compile 설정 중 예외 발생, 기본 모드로 폴백: {e}")
