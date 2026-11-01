@@ -167,7 +167,7 @@ class PyTorchT2SAdapter:
                 print("🔥 [최적화] PyTorch 2.x Inductor 컴파일 엔진을 가동합니다...")
                 try:
                     # mode="reduce-overhead"는 CPU 환경에서 불필요한 파이썬 호출을 C++로 묶어버립니다.
-                    for block in self.model.blocks:
+                    for block in self.model.t2s_transformer.blocks:
                         block.decode_next_token = torch.compile(
                         block.decode_next_token,
                         mode="reduce-overhead",
@@ -271,7 +271,7 @@ class ZundamonTTSEngine:
         seed: int = None,
     ):
         self.lock = threading.RLock()
-        self.num_threads = num_threads or get_container_cpu_threads()
+        self.num_threads = num_threads
         os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
         torch.set_num_threads(self.num_threads)
         self.onnx_providers = get_onnx_providers(self.num_threads)
