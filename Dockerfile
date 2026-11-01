@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     NLTK_DATA=/usr/local/share/nltk_data \
     PIP_ROOT_USER_ACTION=ignore \
-    PIP_BREAK_SYSTEM_PACKAGES=1
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4"
 
 WORKDIR /app
 
@@ -22,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     build-essential \
     cmake \
+    libtcmalloc-minimal4 \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 의존성 파일 복사 및 설치 (런타임 전용)
