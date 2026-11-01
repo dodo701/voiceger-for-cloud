@@ -232,14 +232,36 @@ class ONNXVitsAdapter:
         sess_options = create_ort_session_options(num_threads)
         self.vits_session = ort.InferenceSession(vits_onnx_path, sess_options=sess_options, providers=providers)
         self.ref_audio_sr = None
+        self.io_bindings = [self.vits_session.io_binding(), self.vits_session.io_binding()]
+        self.binding_idx = 0
+        self.ref_audio_ort = None
+
+    def _set_ref_audio(self, ref_audio: np.ndarray):
+        self.ref_audio_sr = ref_audio
+        # Pre-allocate OrtValue for reference audio to avoid recreation on every decode
+        self.ref_audio_ort = ort.OrtValue.ortvalue_from_numpy(ref_audio)
 
     def decode(self, pred_semantic: np.ndarray, text_seq: np.ndarray, speed: float = 1.0) -> np.ndarray:
-        onnx_inputs = {
-            "text_seq": np.ascontiguousarray(text_seq, dtype=np.int64),
-            "pred_semantic": np.ascontiguousarray(pred_semantic, dtype=np.int64),
-            "ref_audio": self.ref_audio_sr,
-        }
-        audio_onnx = self.vits_session.run(["audio"], onnx_inputs)[0]
+        text_seq = np.ascontiguousarray(text_seq, dtype=np.int64)
+        pred_semantic = np.ascontiguousarray(pred_semantic, dtype=np.int64)
+
+        text_seq_ort = ort.OrtValue.ortvalue_from_numpy(text_seq)
+        pred_semantic_ort = ort.OrtValue.ortvalue_from_numpy(pred_semantic)
+
+        io_binding = self.io_bindings[self.binding_idx]
+        self.binding_idx = 1 - self.binding_idx
+
+        io_binding.clear_binding_inputs()
+        io_binding.clear_binding_outputs()
+
+        io_binding.bind_ortvalue_input("text_seq", text_seq_ort)
+        io_binding.bind_ortvalue_input("pred_semantic", pred_semantic_ort)
+        io_binding.bind_ortvalue_input("ref_audio", self.ref_audio_ort)
+        io_binding.bind_output("audio")
+
+        self.vits_session.run_with_iobinding(io_binding)
+        audio_onnx = io_binding.copy_outputs_to_cpu()[0]
+
         if audio_onnx.ndim == 3:
             audio_onnx = audio_onnx[0, 0, :]
         return audio_onnx
@@ -347,7 +369,7 @@ class ZundamonTTSEngine:
 
         self.current_ref_name = basename
         self.prompt_semantic = np.asarray(entry["prompt_semantic"], dtype=np.int64)
-        self.vits.ref_audio_sr = np.asarray(entry["ref_audio_sr"], dtype=np.float32)
+        self.vits._set_ref_audio(np.asarray(entry["ref_audio_sr"], dtype=np.float32))
 
     def generate_sentence_with_latency(
         self,
