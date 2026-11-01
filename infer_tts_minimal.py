@@ -167,12 +167,14 @@ class PyTorchT2SAdapter:
                 print("🔥 [최적화] PyTorch 2.x Inductor 컴파일 엔진을 가동합니다...")
                 try:
                     # mode="reduce-overhead"는 CPU 환경에서 불필요한 파이썬 호출을 C++로 묶어버립니다.
-                    self.model.infer_panel_naive = torch.compile(
-                        self.model.infer_panel_naive,
+                    for block in self.model.blocks:
+                        block.decode_next_token = torch.compile(
+                        block.decode_next_token,
                         mode="reduce-overhead",
                         backend="inductor",
-                        dynamic=False,  # 정적 KV 캐시 할당으로 인해 False로 설정하여 메모리 오버헤드 최적화
-                    )
+                        dynamic=True
+                        )
+                        
                 except Exception as e:
                     print(f"⚠️ torch.compile 설정 중 예외 발생, 기본 모드로 폴백: {e}")
             else:

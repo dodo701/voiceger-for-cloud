@@ -9,8 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     NLTK_DATA=/usr/local/share/nltk_data \
     PIP_ROOT_USER_ACTION=ignore \
-    PIP_BREAK_SYSTEM_PACKAGES=1 \
-    LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4"
+    PIP_BREAK_SYSTEM_PACKAGES=1 
 
 WORKDIR /app
 
@@ -49,7 +48,7 @@ RUN python download.py
 
 # 6. 모델 다운로드 완료 후 런타임에는 외부 통신을 하지 않도록 오프라인 모드 고정
 ENV HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 
 
 # 7. 일본어 사전 심볼릭 링크 연결 및 LangSegment 패키지 오류 패치
 RUN python -c "\
@@ -66,6 +65,9 @@ os.symlink(src, target) if os.path.exists(src) else None" && \
 # Cloud Run 기본 포트
 ENV PORT=8080
 EXPOSE 8080
+
+ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4"
+# added for tcmalloc
 
 # 기본 실행 명령어 (API 서버 엔드포인트 추가 시 변경 가능)
 CMD ["python", "grpcservice.py"]
