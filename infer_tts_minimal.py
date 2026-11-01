@@ -271,7 +271,7 @@ class ZundamonTTSEngine:
         seed: int = None,
     ):
         self.lock = threading.RLock()
-        self.num_threads = num_threads
+        self.num_threads = num_threads or get_container_cpu_threads()
         os.environ["OMP_NUM_THREADS"] = str(self.num_threads)
         torch.set_num_threads(self.num_threads)
         self.onnx_providers = get_onnx_providers(self.num_threads)
