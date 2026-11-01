@@ -3,6 +3,7 @@ import sys
 import time
 import math
 import json
+import shutil
 import random
 import threading
 import platform
@@ -152,6 +153,36 @@ class PyTorchT2SAdapter:
         self.model = Text2SemanticDecoder(config=self.config, top_k=self.top_k)
         self.model.load_state_dict(state_dict)
         self.model.eval().to(device)
+
+        # [추가된 JIT 컴파일 최적화 로직]
+        global torch
+        if int(torch.__version__.split(".")[0]) >= 2:
+            import torch._dynamo
+            torch._dynamo.config.suppress_errors = True  # 호환성 에러 발생 시 원본 파이토치로 자동 폴백
+
+            # Windows에서 MSVC(cl.exe)가 없는 경우 컴파일러 탐색 지연을 방지하기 위한 C++ 컴파일러 검사
+            has_compiler = (shutil.which("cl") is not None) if sys.platform == "win32" else True
+
+            if has_compiler:
+                print("🔥 [최적화] PyTorch 2.x Inductor 컴파일 엔진을 가동합니다...")
+                try:
+                    # mode="reduce-overhead"는 CPU 환경에서 불필요한 파이썬 호출을 C++로 묶어버립니다.
+                    self.model.infer_panel_naive = torch.compile(
+                        self.model.infer_panel_naive,
+                        mode="reduce-overhead",
+                        backend="inductor",
+                        dynamic=True,  # 텍스트 길이에 따라 텐서 크기가 변하는 GPT 루프에 필수
+                    )
+                except Exception as e:
+                    print(f"⚠️ torch.compile 설정 중 예외 발생, 기본 모드로 폴백: {e}")
+            else:
+                print("ℹ️ [최적화] Windows 환경에서 MSVC(cl.exe) 컴파일러가 감지되지 않아 JIT Inductor 컴파일을 건너뛰고 기본 모드로 구동합니다. (Linux Docker 환경에서는 build-essential/g++로 자동 가속됩니다)")
+        else:
+            print("⚠️ PyTorch 2.0 미만 버전입니다. Script JIT 컴파일을 시도합니다.")
+            try:
+                self.model = torch.jit.script(self.model)
+            except Exception as e:
+                print(f"⚠️ torch.jit.script 컴파일 실패, 원본 모델 유지: {e}")
 
     def infer(
         self,
