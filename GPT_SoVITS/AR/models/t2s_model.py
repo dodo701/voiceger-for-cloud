@@ -132,8 +132,7 @@ class T2SBlock:
         else:
             attn = scaled_dot_product_attention(q, k_view, v_view, attn_mask)
 
-        attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
-        attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        attn = attn.transpose(1, 2).reshape(batch_size, q_len, self.hidden_dim)
         attn = F.linear(self.to_mask(attn, padding_mask), self.out_w, self.out_b)
 
         if padding_mask is not None:
@@ -195,8 +194,7 @@ class T2SBlock:
         else:
             attn = scaled_dot_product_attention(q, k_view, v_view, attn_mask)
 
-        attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
-        attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        attn = attn.transpose(1, 2).reshape(batch_size, q_len, self.hidden_dim)
         attn = F.linear(attn, self.out_w, self.out_b)
 
         x = x + attn
