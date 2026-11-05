@@ -7,7 +7,7 @@
 -r requirements.txt
 
 torch==2.11.0+cpu
-torchaudio==2.11.0+cpu
+torchaudio==2.11.1+cpu
 transformers==5.22.0
 tokenizers==0.23.3
 safetensors==0.8.0
