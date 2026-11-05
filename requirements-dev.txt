@@ -14,7 +14,7 @@ safetensors==0.8.0
 librosa==0.11.0
 pytorch-lightning==2.6.6        # needed when onnx_export.py loads the AR model code
 einops==0.8.2
-scipy==1.17.1
+scipy==1.18.1
 onnx==1.23.2
 
 # Benchmark / profiling
