@@ -13,7 +13,7 @@ torch
 safetensors==0.8.0
 numpy==2.2.6
 onnxruntime-openvino==1.24.1
-openvino==2025.4.1  
+openvino==2026.4.1  
 
 # --- Audio / common utils ---
 soundfile==0.14.0
